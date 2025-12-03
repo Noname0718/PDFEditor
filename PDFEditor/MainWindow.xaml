@@ -1,0 +1,182 @@
+﻿<Window x:Class="PDFEditor.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PDF Editor" Height="800" Width="1200">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 상단 컨트롤 -->
+        <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="5">
+            <!-- PDF 기본 컨트롤 -->
+            <Button Content="PDF 열기" Click="OpenPdf_Click" Margin="0,0,5,0"/>
+            
+            <!-- ====== 여기부터 필기 도구 툴바 ====== -->
+            <Separator Margin="10,0,10,0" Width="1"/>
+
+            <!-- 도구 버튼 3종 -->
+            <ToggleButton x:Name="PenButton"
+                          Content="✏ 펜"
+                          Width="70" Margin="0,0,5,0"
+                          IsChecked="True"
+                          Click="ToolButton_Click"
+                          Tag="Pen"/>
+
+            <ToggleButton x:Name="HighlighterButton"
+                          Content="🖍 형광펜"
+                          Width="90" Margin="0,0,5,0"
+                          Click="ToolButton_Click"
+                          Tag="Highlighter"/>
+
+            <ToggleButton x:Name="EraserButton"
+                          Content="🧹 지우개"
+                          Width="80" Margin="0,0,5,0"
+                          Click="ToolButton_Click"
+                          Tag="Eraser"/>
+
+            <!-- 도형 버튼 4종 -->
+            <ToggleButton x:Name="RectButton"
+              Content="▭ 사각형"
+              Width="80" Margin="5,0,0,0"
+              Click="ToolButton_Click"
+              Tag="Rectangle"/>
+
+            <ToggleButton x:Name="EllipseButton"
+              Content="◯ 원"
+              Width="70" Margin="5,0,0,0"
+              Click="ToolButton_Click"
+              Tag="Ellipse"/>
+
+            <ToggleButton x:Name="LineButton"
+              Content="／ 직선"
+              Width="70" Margin="5,0,0,0"
+              Click="ToolButton_Click"
+              Tag="Line"/>
+
+            <ToggleButton x:Name="TriangleButton"
+              Content="△ 삼각형"
+              Width="80" Margin="5,0,0,0"
+              Click="ToolButton_Click"
+              Tag="Triangle"/>
+
+            <!-- 색 선택 -->
+            <TextBlock Text="색:" VerticalAlignment="Center" Margin="10,0,3,0"/>
+            <ComboBox x:Name="ColorComboBox"
+                      Width="90"
+                      SelectionChanged="ColorComboBox_SelectionChanged">
+                <ComboBoxItem Content="검정" Tag="Black" IsSelected="True"/>
+                <ComboBoxItem Content="빨강" Tag="Red"/>
+                <ComboBoxItem Content="파랑" Tag="Blue"/>
+                <ComboBoxItem Content="초록" Tag="Green"/>
+                <ComboBoxItem Content="노랑" Tag="Yellow"/>
+                <ComboBoxItem Content="주황" Tag="Orange"/>
+                <ComboBoxItem Content="보라" Tag="Purple"/>
+            </ComboBox>
+
+            <!-- 두께 슬라이더 -->
+            <TextBlock Text="두께:" VerticalAlignment="Center" Margin="10,0,3,0"/>
+
+            <Slider x:Name="ThicknessSlider"
+                Minimum="1"
+                Maximum="15"
+                Value="3"
+                Width="100"
+                TickFrequency="1"
+                IsSnapToTickEnabled="True"
+                VerticalAlignment="Center"
+                ValueChanged="ThicknessSlider_ValueChanged"/>
+
+            <TextBlock x:Name="ThicknessValueText"
+                VerticalAlignment="Center"
+                Margin="5,0,0,0"
+                Text="3px"/>
+
+            <!-- ====== 필기 도구 끝 ====== -->
+        </StackPanel>
+
+        <!-- PDF + 필기 (스크롤) -->
+        <ScrollViewer x:Name="PdfScrollViewer"
+                      Grid.Row="1"
+                      Background="#FFE5E5E5"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Auto">
+            <StackPanel x:Name="PagesPanel">
+                <StackPanel.LayoutTransform>
+                    <!-- 🔍 여기서 바로 줌 적용 -->
+                    <ScaleTransform x:Name="ZoomTransform"
+                                    ScaleX="1"
+                                    ScaleY="1" />
+                </StackPanel.LayoutTransform>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Row= "2" Margin="7">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/> <!-- 왼쪽: 페이지 -->
+                <ColumnDefinition Width="*"/> <!-- 가운데: 여백 -->
+                <ColumnDefinition Width="Auto"/> <!-- 오른쪽: 줌 -->
+            </Grid.ColumnDefinitions>
+
+            <!-- 🔹 왼쪽 아래: 이전/다음/페이지 입력/이동/페이지 정보 -->
+            <StackPanel Orientation="Horizontal"
+                Grid.Column="0"
+                VerticalAlignment="Center">
+                <Button Content="이전 페이지"
+                Click="PrevPage_Click"
+                Margin="0,0,5,0"/>
+
+                <Button Content="다음 페이지"
+                Click="NextPage_Click"
+                Margin="0,0,5,0"/>
+
+                <TextBlock Text="페이지:"
+                   VerticalAlignment="Center"
+                   Margin="10,0,3,0"/>
+
+                <TextBox x:Name="PageInput"
+                 Width="50"
+                 VerticalAlignment="Center"
+                 Margin="0,0,3,0"/>
+
+                <Button Content="이동"
+                Click="GoToPage_Click"
+                Margin="0,0,10,0"/>
+
+                <TextBlock x:Name="PageInfoText"
+                   VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- 🔹 오른쪽 아래: 줌 슬라이더 + 입력 -->
+            <StackPanel Orientation="Horizontal"
+                Grid.Column="2"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center">
+                <TextBlock Text="줌:"
+                   VerticalAlignment="Center"
+                   Margin="0,0,3,0"/>
+
+                <Slider x:Name="ZoomSlider"
+                Minimum="50"
+                Maximum="300"
+                Value="100"
+                Width="120"
+                ValueChanged="ZoomSlider_ValueChanged"
+                VerticalAlignment="Center"/>
+
+                <TextBox x:Name="ZoomTextBox"
+                 Width="40"
+                 Margin="5,0,0,0"
+                 VerticalAlignment="Center"
+                 Text="100"
+                 KeyDown="ZoomTextBox_KeyDown"/>
+
+                <TextBlock Text="%"
+                   VerticalAlignment="Center"
+                   Margin="2,0,0,0"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>
