@@ -9,7 +9,6 @@ using System.Windows.Ink;
 
 namespace PDFEditor.Shapes
 {
-    // 사용자가 선택 가능한 도형 타입 정의
     public enum ShapeType
     {
         None,
@@ -19,35 +18,28 @@ namespace PDFEditor.Shapes
         Triangle
     }
 
-    /// <summary>
-    /// InkCanvas 위에 사각형/원/선 등을 직접 그려 주는 도구 관리자.
-    /// 도형 드래그, 미리보기, 태그 기반 지우개 기능을 모두 담당한다.
-    /// </summary>
     public class ShapeToolManager
     {
-        // InkCanvas.Children에서 다른 요소와 구분하기 위해 부여하는 태그
         private const string ShapeElementTag = "ShapeToolElement";
 
         public ShapeType CurrentShape { get; private set; } = ShapeType.None;
         public Brush StrokeBrush { get; private set; } = Brushes.Black;
         public double StrokeThickness { get; private set; } = 3.0;
 
-        // InkCanvas 별 드래깅 상태 저장
         private class ShapeDrawingState
         {
             public bool IsDrawing;
             public Point StartPoint;
             public Shape PreviewShape;
+            public bool IsErasingShapes;
         }
 
         private readonly Dictionary<InkCanvas, ShapeDrawingState> _states
             = new Dictionary<InkCanvas, ShapeDrawingState>();
+
+        // 🔹 도형 지우개 모드 플래그
         private bool _eraseShapeMode = false;
 
-        /// <summary>
-        /// InkCanvas에 도형 도구를 붙여 마우스 이벤트를 가로챈다.
-        /// Preview 이벤트를 사용해야 InkCanvas 지우개 모드에서도 동작한다.
-        /// </summary>
         public void AttachCanvas(InkCanvas canvas)
         {
             if (canvas == null || _states.ContainsKey(canvas))
@@ -60,50 +52,48 @@ namespace PDFEditor.Shapes
             canvas.PreviewMouseLeftButtonUp += Canvas_MouseLeftButtonUp;
         }
 
-        /// <summary>
-        /// 현재 그릴 도형 종류 지정.
-        /// </summary>
         public void SetShape(ShapeType type)
         {
             CurrentShape = type;
         }
 
-        /// <summary>
-        /// 도형 전용 지우개 모드를 설정.
-        /// InkCanvas 지우개가 동작할 때 화면의 도형을 함께 지우는 데 사용.
-        /// </summary>
+        // 🔹 MainWindow에서 호출: "지우개가 도형도 지우게 할지" 설정
         public void SetShapeEraseMode(bool enabled)
         {
             _eraseShapeMode = enabled;
         }
 
-        /// <summary>
-        /// 도형 외곽선 색/두께 적용.
-        /// </summary>
         public void SetStroke(Brush brush, double thickness)
         {
             StrokeBrush = brush ?? Brushes.Black;
             StrokeThickness = thickness;
         }
 
+        /// <summary>
+        /// 도형 드래그 시작. 지우개 모드면 해당 지점의 도형을 즉시 삭제한다.
+        /// </summary>
         private void Canvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             var canvas = (InkCanvas)sender;
+            var state = _states[canvas];
+
+            // 🔸 도형 지우개 모드일 때: 누르는 순간 그 위치의 도형 제거 + 드래그 플래그 on
             if (_eraseShapeMode)
             {
-                TryEraseShape(canvas, e.GetPosition(canvas)); // 지우개 모드일 때는 즉시 지우기
+                state.IsErasingShapes = true;
+                TryEraseShape(canvas, e.GetPosition(canvas));
+                canvas.CaptureMouse();
                 return;
             }
 
+            // 도형이 선택되지 않았으면 아무 것도 안 함 (펜/형광펜은 InkToolManager가 처리)
             if (CurrentShape == ShapeType.None)
                 return;
-
-            var state = _states[canvas];
 
             state.IsDrawing = true;
             state.StartPoint = e.GetPosition(canvas);
 
-            var shape = CreateShape();   // 미리보기용 Shape 생성
+            var shape = CreateShape();
             shape.Stroke = StrokeBrush;
             shape.StrokeThickness = StrokeThickness;
             shape.Fill = Brushes.Transparent;
@@ -111,14 +101,11 @@ namespace PDFEditor.Shapes
             state.PreviewShape = shape;
             canvas.Children.Add(shape);
 
-            // ✅ 위치는 여기서 잡지 않고, MouseMove에서만 계산
+            // 위치/크기는 MouseMove에서만 결정
             canvas.CaptureMouse();
             e.Handled = true;
         }
 
-        /// <summary>
-        /// 현재 ShapeType에 맞는 Shape 인스턴스를 생성하고 태그를 붙인다.
-        /// </summary>
         private Shape CreateShape()
         {
             Shape shape;
@@ -141,26 +128,30 @@ namespace PDFEditor.Shapes
                     break;
             }
 
-            shape.Tag = ShapeElementTag;
+            shape.Tag = ShapeElementTag; // 지울 때 구분용
             return shape;
         }
 
+        /// <summary>
+        /// 드래그 중 미리보기 도형의 위치/크기를 업데이트하거나 지우개 모드에서는 연속 삭제를 수행한다.
+        /// </summary>
         private void Canvas_MouseMove(object sender, MouseEventArgs e)
         {
             var canvas = (InkCanvas)sender;
+            var state = _states[canvas];
+
+            // 🔸 도형 지우개 모드: 드래그 플래그가 켜져 있을 때 계속 삭제
             if (_eraseShapeMode)
             {
-                if (e.LeftButton == MouseButtonState.Pressed)
+                if (state.IsErasingShapes)
                 {
-                    TryEraseShape(canvas, e.GetPosition(canvas)); // 드래그 중에도 지우기
+                    TryEraseShape(canvas, e.GetPosition(canvas));
                 }
                 return;
             }
 
             if (CurrentShape == ShapeType.None)
                 return;
-
-            var state = _states[canvas];
 
             if (!state.IsDrawing || state.PreviewShape == null)
                 return;
@@ -171,13 +162,24 @@ namespace PDFEditor.Shapes
             e.Handled = true;
         }
 
+        /// <summary>
+        /// 마우스를 떼면 드래그 상태를 종료하고 Capture를 해제한다.
+        /// </summary>
         private void Canvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
-            if (CurrentShape == ShapeType.None)
-                return;
-
             var canvas = (InkCanvas)sender;
             var state = _states[canvas];
+
+            // 🔸 도형 지우개 모드: 드래그 종료 처리
+            if (_eraseShapeMode)
+            {
+                state.IsErasingShapes = false;
+                canvas.ReleaseMouseCapture();
+                return;
+            }
+
+            if (CurrentShape == ShapeType.None)
+                return;
 
             if (!state.IsDrawing)
                 return;
@@ -189,22 +191,17 @@ namespace PDFEditor.Shapes
             e.Handled = true;
         }
 
-        /// <summary>
-        /// 시작/현재 포인트를 기준으로 bounding box를 만들고
-        /// Shape 타입에 맞춰 위치/크기/점 정보를 갱신한다.
-        /// </summary>
         private void UpdateShapeGeometry(ShapeDrawingState state, Point current)
         {
             Point start = state.StartPoint;
 
-            // ✅ 시작점과 현재점으로 bounding box 생성 (왼쪽/위 드래그 자동 처리)
+            // 시작점과 현재점으로 bounding box 생성
             Rect box = new Rect(start, current);
             double left = box.X;
             double top = box.Y;
             double width = box.Width;
             double height = box.Height;
 
-            // 너무 작으면 안 보일 수 있으니 최소값
             if (width < 1) width = 1;
             if (height < 1) height = 1;
 
@@ -232,7 +229,6 @@ namespace PDFEditor.Shapes
                     break;
 
                 case Polygon polygon:
-                    // 드래그 박스 기준에 맞춘 삼각형 (위/좌하/우하)
                     var p1 = new Point(left + width / 2, top);          // 위 중앙
                     var p2 = new Point(left, top + height);             // 좌하
                     var p3 = new Point(left + width, top + height);     // 우하
@@ -241,35 +237,55 @@ namespace PDFEditor.Shapes
             }
         }
 
-        /// <summary>
-        /// 마우스 좌표 아래의 Shape를 찾고 태그가 맞으면 InkCanvas에서 제거한다.
-        /// </summary>
+        // ===============================
+        //   🔻 여기부터 도형 지우기 로직
+        // ===============================
         private void TryEraseShape(InkCanvas canvas, Point point)
         {
             if (canvas == null) return;
 
-            var hit = VisualTreeHelper.HitTest(canvas, point);
-            if (hit == null) return;
-
-            var shape = FindShapeFromHit(hit.VisualHit);
+            Shape shape = FindShapeAtPoint(canvas, point);
             if (shape == null) return;
-            if (!Equals(shape.Tag, ShapeElementTag)) return;
-            if (!canvas.Children.Contains(shape)) return;
 
             canvas.Children.Remove(shape);
         }
 
-        /// <summary>
-        /// 히트 테스트 결과에서 Shape가 나올 때까지 시각 트리를 거슬러 올라간다.
-        /// </summary>
-        private Shape FindShapeFromHit(DependencyObject visual)
+        private Shape FindShapeAtPoint(InkCanvas canvas, Point canvasPoint)
         {
-            while (visual != null && !(visual is Shape))
+            for (int i = canvas.Children.Count - 1; i >= 0; i--)
             {
-                visual = VisualTreeHelper.GetParent(visual);
+                if (canvas.Children[i] is Shape shape && Equals(shape.Tag, ShapeElementTag))
+                {
+                    if (IsPointInsideShape(canvas, shape, canvasPoint))
+                        return shape;
+                }
             }
 
-            return visual as Shape;
+            return null;
+        }
+
+        private bool IsPointInsideShape(InkCanvas canvas, Shape shape, Point canvasPoint)
+        {
+            if (shape == null) return false;
+
+            GeneralTransform transform = shape.TransformToVisual(canvas);
+            if (transform == null)
+                return false;
+
+            GeneralTransform inverse = transform.Inverse;
+            if (inverse == null || !inverse.TryTransform(canvasPoint, out Point localPoint))
+                return false;
+            var geometry = shape.RenderedGeometry;
+            if (geometry == null)
+                return false;
+
+            if (geometry.FillContains(localPoint))
+                return true;
+
+            double thickness = Math.Max(shape.StrokeThickness, 1);
+            var pen = new Pen(shape.Stroke ?? Brushes.Black, thickness + 4);
+
+            return geometry.StrokeContains(pen, localPoint);
         }
     }
 }

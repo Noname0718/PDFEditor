@@ -29,6 +29,11 @@
 4. **줌 처리**
    - StackPanel 전체를 `ScaleTransform`으로 확대/축소하며, `FitWidthToViewer`가 ScrollViewer 폭을 기준으로 `_baseScale`을 계산합니다.
 
+## 발생했던 문제 및 해결
+| 이슈 | 원인 | 해결 방법 |
+| --- | --- | --- |
+| 지우개로 도형이 지워지지 않음 | InkCanvas 지우개는 `Stroke`에만 동작하고, 도형은 `Shape` 컨트롤로 추가되어 있어서 히트 테스트가 되지 않음 | `ShapeToolManager`가 Preview 이벤트에서 마우스 이동을 추적하고, InkCanvas.Children을 역순으로 검사하여 `RenderedGeometry` 기반으로 도형을 찾아 삭제하도록 로직을 추가 |
+
 ## 실행 및 사용 방법
 1. Visual Studio 또는 `msbuild`로 `PDFEditor.sln`을 빌드합니다.
 2. 앱 실행 후 `PDF 열기` 버튼으로 PDF 파일을 선택합니다.

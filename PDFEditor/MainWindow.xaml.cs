@@ -160,6 +160,10 @@ namespace PDFEditor
             ScrollToPage(0);
         }
 
+        /// <summary>
+        /// PdfiumViewer가 제공하는 System.Drawing.Image를 BitmapImage로 변환한다.
+        /// InkCanvas 위에 덮을 Image 컨트롤은 WPF BitmapSource만 지원하므로 메모리 스트림을 경유한다.
+        /// </summary>
         private BitmapImage ImageToImageSource(System.Drawing.Image image)
         {
             using (var ms = new MemoryStream())
@@ -192,7 +196,8 @@ namespace PDFEditor
         }
 
         /// <summary>
-        /// 특정 페이지로 스크롤 이동
+        /// 특정 페이지 인덱스를 현재 페이지로 설정하고 페이지 정보 및 InkCanvas 상태를 갱신한다.
+        /// PdfScrollViewer의 실제 스크롤 이동은 Border.RequestBringIntoView 억제 로직으로 제어한다.
         /// </summary>
         private void ScrollToPage(int pageIndex)
         {
@@ -201,12 +206,14 @@ namespace PDFEditor
 
             _currentPage = pageIndex;
             UpdatePageInfo();
-            
+
+            // 페이지가 바뀌면 InkCanvas 레퍼런스도 달라지므로 현재 선택된 도구를 다시 적용한다.
             _inkTool.SetTool(_inkTool.CurrentTool, GetCurrentInkCanvas());
         }
 
         /// <summary>
-        /// 다음 페이지로 이동 버튼.
+        /// 다음 페이지 버튼 클릭 시 한 페이지 앞으로 이동한다.
+        /// 실제 스크롤 이동 대신 페이지 인덱스 및 InkCanvas 상태만 갱신한다.
         /// </summary>
         private void NextPage_Click(object sender, RoutedEventArgs e)
         {
@@ -221,7 +228,7 @@ namespace PDFEditor
         }
 
         /// <summary>
-        /// 이전 페이지 이동 버튼.
+        /// 이전 페이지 버튼 클릭 시 한 페이지 뒤로 이동한다.
         /// </summary>
         private void PrevPage_Click(object sender, RoutedEventArgs e)
         {
@@ -236,6 +243,7 @@ namespace PDFEditor
 
         /// <summary>
         /// 페이지 번호 입력 후 이동 버튼.
+        /// 잘못된 번호면 아무 작업도 하지 않는다(추가 검증/메시지 필요 시 여기서 처리).
         /// </summary>
         private void GoToPage_Click(object sender, RoutedEventArgs e)
         {
@@ -371,19 +379,19 @@ namespace PDFEditor
             if (LineButton != null) LineButton.IsChecked = false;
             if (TriangleButton != null) TriangleButton.IsChecked = false;
 
-            // 클릭된 것만 체크
             clicked.IsChecked = true;
 
             string tag = clicked.Tag as string ?? "";
 
-            // 2) 필기 도구 (펜/형광펜/지우개)
+            // 🔹 2) 펜 / 형광펜 / 지우개
             if (tag == "Pen" || tag == "Highlighter" || tag == "Eraser")
             {
-                // 도형 모드는 끄기
+                // 도형 그리기 모드는 끄기
                 _shapeTool.SetShape(ShapeType.None);
+
+                // 도형 지우개 모드는 "지우개일 때만" 켜기
                 _shapeTool.SetShapeEraseMode(tag == "Eraser");
 
-                // 기존 InkToolManager 로 도구 설정
                 foreach (InkCanvas canvas in _pageInkCanvases.Values)
                 {
                     if (tag == "Pen")
@@ -397,13 +405,14 @@ namespace PDFEditor
                 return;
             }
 
-            // 3) 도형 도구들
+            // 🔹 3) 도형 도구들 (사각형/원/선/삼각형)
             foreach (InkCanvas canvas in _pageInkCanvases.Values)
             {
-                // 도형을 직접 그리고 있으니까 InkCanvas 자체 필기는 막는다
+                // 도형 그릴 때는 InkCanvas 필기 막기
                 canvas.EditingMode = InkCanvasEditingMode.None;
             }
 
+            // 도형 선택 시에는 도형 지우개 모드 끔
             _shapeTool.SetShapeEraseMode(false);
 
             switch (tag)
