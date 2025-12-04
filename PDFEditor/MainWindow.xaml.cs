@@ -27,11 +27,14 @@ namespace PDFEditor
         private InkToolManager _inkTool = new InkToolManager();    // 펜/형광펜/지우개 제어
         private Dictionary<int, InkCanvas> _pageInkCanvases = new Dictionary<int, InkCanvas>(); // 페이지별 InkCanvas
         private ShapeToolManager _shapeTool = new ShapeToolManager(); // 도형 그리기/지우기 제어
-
+        private SelectionToolManager _selectionTool = new SelectionToolManager();
+        private PenCursorManager _penCursorManager = new PenCursorManager();
         public MainWindow()
         {
             InitializeComponent();
             this.SizeChanged += MainWindow_SizeChanged;
+            _penCursorManager.SetThickness(ThicknessSlider?.Value ?? 3.0);
+            _penCursorManager.SetEnabled(true);
         }
 
         /// <summary>
@@ -76,6 +79,7 @@ namespace PDFEditor
         {
             PagesPanel.Children.Clear();
             _pageInkCanvases.Clear();
+            _penCursorManager.Clear();
 
             // 줌 초기화
             ZoomTransform.ScaleX = 1.0;
@@ -127,6 +131,8 @@ namespace PDFEditor
                     ApplyCurrentColorAndThicknessToInkCanvas(ink); // 색/두께 동기화
 
                     _shapeTool.AttachCanvas(ink); // 도형 드로잉/지우기 이벤트 연결
+                    _selectionTool.AttachCanvas(ink); // 선택 도구 이벤트 연결
+                    _penCursorManager.AttachCanvas(ink); // 펜 위치 표시 연결
 
                     var pageGrid = new Grid 
                     {
@@ -157,6 +163,9 @@ namespace PDFEditor
                     _pageInkCanvases[pageIndex] = ink;
                 }
             }
+            bool penLikeTool = _inkTool.CurrentTool == DrawTool.Pen || _inkTool.CurrentTool == DrawTool.Highlighter;
+            _penCursorManager.SetEnabled(penLikeTool);
+
             ScrollToPage(0);
         }
 
@@ -209,6 +218,8 @@ namespace PDFEditor
 
             // 페이지가 바뀌면 InkCanvas 레퍼런스도 달라지므로 현재 선택된 도구를 다시 적용한다.
             _inkTool.SetTool(_inkTool.CurrentTool, GetCurrentInkCanvas());
+
+            ScrollCurrentPageIntoView();
         }
 
         /// <summary>
@@ -218,13 +229,7 @@ namespace PDFEditor
         private void NextPage_Click(object sender, RoutedEventArgs e)
         {
             if (_pdf == null) return;
-            if (_currentPage >= _pdf.PageCount - 1) return;
-
-            _currentPage++;
-            UpdatePageInfo();
-
-            // 현재 도구 상태를 새 페이지 InkCanvas에 적용
-            _inkTool.SetTool(_inkTool.CurrentTool, GetCurrentInkCanvas());
+            ScrollToPage(_currentPage + 1);
         }
 
         /// <summary>
@@ -233,12 +238,7 @@ namespace PDFEditor
         private void PrevPage_Click(object sender, RoutedEventArgs e)
         {
             if (_pdf == null) return;
-            if (_currentPage <= 0) return;
-
-            _currentPage--;
-            UpdatePageInfo();
-
-            _inkTool.SetTool(_inkTool.CurrentTool, GetCurrentInkCanvas());
+            ScrollToPage(_currentPage - 1);
         }
 
         /// <summary>
@@ -253,12 +253,7 @@ namespace PDFEditor
             {
                 // 사용자는 1부터 입력하니까 0-based로 변환
                 int targetIndex = pageNumber - 1;
-                if (targetIndex < 0 || targetIndex >= _pdf.PageCount)
-                    return;
-                _currentPage = targetIndex;
-                UpdatePageInfo();
-
-                _inkTool.SetTool(_inkTool.CurrentTool, GetCurrentInkCanvas());
+                ScrollToPage(targetIndex);
             }
             else
             {
@@ -371,6 +366,7 @@ namespace PDFEditor
             if (clicked == null) return;
 
             // 1) 모든 버튼 체크 해제
+            if (SelectButton != null) SelectButton.IsChecked = false;
             if (PenButton != null) PenButton.IsChecked = false;
             if (HighlighterButton != null) HighlighterButton.IsChecked = false;
             if (EraserButton != null) EraserButton.IsChecked = false;
@@ -382,7 +378,27 @@ namespace PDFEditor
             clicked.IsChecked = true;
 
             string tag = clicked.Tag as string ?? "";
+            // 🔹 1) 선택 도구
+            if (tag == "Select")
+            {
+                // 펜/도형 모드는 모두 비활성화
+                _shapeTool.SetShape(ShapeType.None);
+                _shapeTool.SetShapeEraseMode(false);
+                _selectionTool.SetEnabled(true);
+                _penCursorManager.SetEnabled(false);
 
+                // InkCanvas 필기/지우개 모두 끄기 (선택만 할 수 있게)
+                foreach (InkCanvas canvas in _pageInkCanvases.Values)
+                {
+                    canvas.EditingMode = InkCanvasEditingMode.None;
+                }
+
+                return;
+            }
+            else
+            {
+                _selectionTool.SetEnabled(false);
+            }
             // 🔹 2) 펜 / 형광펜 / 지우개
             if (tag == "Pen" || tag == "Highlighter" || tag == "Eraser")
             {
@@ -402,6 +418,7 @@ namespace PDFEditor
                         _inkTool.SetTool(DrawTool.Eraser, canvas);
                 }
 
+                _penCursorManager.SetEnabled(tag == "Pen" || tag == "Highlighter");
                 return;
             }
 
@@ -414,6 +431,7 @@ namespace PDFEditor
 
             // 도형 선택 시에는 도형 지우개 모드 끔
             _shapeTool.SetShapeEraseMode(false);
+            _penCursorManager.SetEnabled(false);
 
             switch (tag)
             {
@@ -484,6 +502,7 @@ namespace PDFEditor
                 color = (Color)ColorConverter.ConvertFromString(colorName);
             }
             _shapeTool.SetStroke(new SolidColorBrush(color), thickness);
+            _penCursorManager.SetThickness(thickness);
 
             // 모든 페이지의 InkCanvas에 적용
             foreach (InkCanvas canvas in _pageInkCanvases.Values)
@@ -531,9 +550,46 @@ namespace PDFEditor
         /// <summary>
         /// PDF 페이지 클릭 시 ScrollViewer가 강제 스크롤되는 기본 동작을 방지.
         /// </summary>
+        private bool _allowBringIntoView = false;
         private void SuppressBringIntoView(object sender, RequestBringIntoViewEventArgs e)
         {
-            e.Handled = true;
+            if (!_allowBringIntoView)
+            {
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// 현재 선택된 페이지가 ScrollViewer 가운데쯤 보이도록 스크롤한다.
+        /// </summary>
+        private void ScrollCurrentPageIntoView()
+        {
+            if (PdfScrollViewer == null || PagesPanel == null) return;
+            if (_currentPage < 0 || _currentPage >= PagesPanel.Children.Count) return;
+
+            if (PagesPanel.Children[_currentPage] is FrameworkElement pageElement)
+            {
+                // 레이아웃이 최신 상태가 아니면 위치 계산이 틀어지므로 갱신
+                PdfScrollViewer.UpdateLayout();
+                PagesPanel.UpdateLayout();
+
+                if (!pageElement.IsLoaded)
+                {
+                    Dispatcher.BeginInvoke(new Action(ScrollCurrentPageIntoView),
+                        System.Windows.Threading.DispatcherPriority.Loaded);
+                    return;
+                }
+
+                try
+                {
+                    _allowBringIntoView = true;
+                    pageElement.BringIntoView();
+                }
+                finally
+                {
+                    _allowBringIntoView = false;
+                }
+            }
         }
 
     }

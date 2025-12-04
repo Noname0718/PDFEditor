@@ -16,7 +16,14 @@
             
             <!-- ====== 여기부터 필기 도구 툴바 ====== -->
             <Separator Margin="10,0,10,0" Width="1"/>
-
+            
+            <!-- 선택 도구 버튼-->
+            <ToggleButton x:Name="SelectButton"
+              Content="⬚ 선택"
+              Width="70" Margin="0,0,5,0"
+              Click="ToolButton_Click"
+              Tag="Select"/>
+            
             <!-- 도구 버튼 3종 -->
             <ToggleButton x:Name="PenButton"
                           Content="✏ 펜"
