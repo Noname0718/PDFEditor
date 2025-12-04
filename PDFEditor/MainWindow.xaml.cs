@@ -12,8 +12,10 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Ink;
 using System.Windows.Input;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
 
 namespace PDFEditor
 {
@@ -29,10 +31,22 @@ namespace PDFEditor
         private ShapeToolManager _shapeTool = new ShapeToolManager(); // 도형 그리기/지우기 제어
         private SelectionToolManager _selectionTool = new SelectionToolManager();
         private PenCursorManager _penCursorManager = new PenCursorManager();
+        private Dictionary<InkCanvas, int> _inkCanvasPageIndex = new Dictionary<InkCanvas, int>();
+        private Stack<IUndoRedoAction> _undoStack = new Stack<IUndoRedoAction>();
+        private Stack<IUndoRedoAction> _redoStack = new Stack<IUndoRedoAction>();
+        private bool _recordHistory = true;
+        private string _copiedShapeXaml = null;
+        private double _copiedShapeLeft = 0;
+        private double _copiedShapeTop = 0;
+        private bool _hasCopiedPosition = false;
         public MainWindow()
         {
             InitializeComponent();
             this.SizeChanged += MainWindow_SizeChanged;
+            this.PreviewKeyDown += MainWindow_PreviewKeyDown;
+            PdfScrollViewer.PreviewMouseWheel += PdfScrollViewer_PreviewMouseWheel;
+            _shapeTool.ShapeCreated += ShapeTool_ShapeCreated;
+            _shapeTool.ShapeRemoved += ShapeTool_ShapeRemoved;
             _penCursorManager.SetThickness(ThicknessSlider?.Value ?? 3.0);
             _penCursorManager.SetEnabled(true);
         }
@@ -80,6 +94,10 @@ namespace PDFEditor
             PagesPanel.Children.Clear();
             _pageInkCanvases.Clear();
             _penCursorManager.Clear();
+            _inkCanvasPageIndex.Clear();
+            ClearHistory();
+            _copiedShapeXaml = null;
+            _hasCopiedPosition = false;
 
             // 줌 초기화
             ZoomTransform.ScaleX = 1.0;
@@ -126,6 +144,8 @@ namespace PDFEditor
                         ClipToBounds = true //필기 밖으로 나가는 부분 자르기
                     };
                     ink.RequestBringIntoView += SuppressBringIntoView; // 페이지 클릭 시 자동 스크롤 방지
+                    ink.StrokeCollected += InkCanvas_StrokeCollected;
+                    ink.Strokes.StrokesChanged += InkCanvas_StrokesChanged;
 
                     _inkTool.SetTool(_inkTool.CurrentTool, ink); // 현재 선택된 필기 도구 적용
                     ApplyCurrentColorAndThicknessToInkCanvas(ink); // 색/두께 동기화
@@ -161,6 +181,7 @@ namespace PDFEditor
                     PagesPanel.Children.Add(pageBorder);
 
                     _pageInkCanvases[pageIndex] = ink;
+                    _inkCanvasPageIndex[ink] = pageIndex;
                 }
             }
             bool penLikeTool = _inkTool.CurrentTool == DrawTool.Pen || _inkTool.CurrentTool == DrawTool.Highlighter;
@@ -354,6 +375,25 @@ namespace PDFEditor
             }
 
             return null;
+        }
+
+        private InkCanvas GetInkCanvas(int pageIndex)
+        {
+            if (_pageInkCanvases.TryGetValue(pageIndex, out InkCanvas inkCanvas))
+            {
+                return inkCanvas;
+            }
+            return null;
+        }
+
+        private bool TryGetPageIndex(InkCanvas canvas, out int pageIndex)
+        {
+            if (canvas != null && _inkCanvasPageIndex.TryGetValue(canvas, out pageIndex))
+            {
+                return true;
+            }
+            pageIndex = -1;
+            return false;
         }
         /// <summary>
         /// 필기/도형/지우개 토글 버튼 공용 핸들러.
@@ -589,6 +629,395 @@ namespace PDFEditor
                 {
                     _allowBringIntoView = false;
                 }
+            }
+        }
+
+        private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            ModifierKeys mods = Keyboard.Modifiers;
+            bool ctrl = (mods & ModifierKeys.Control) == ModifierKeys.Control;
+            if (!ctrl) return;
+
+            switch (e.Key)
+            {
+                case Key.Z:
+                    if ((mods & ModifierKeys.Shift) == ModifierKeys.Shift)
+                    {
+                        PerformRedo();
+                    }
+                    else
+                    {
+                        PerformUndo();
+                    }
+                    e.Handled = true;
+                    break;
+                case Key.C:
+                    CopySelectedShape();
+                    e.Handled = true;
+                    break;
+                case Key.V:
+                    PasteCopiedShape();
+                    e.Handled = true;
+                    break;
+                case Key.Add:
+                case Key.OemPlus:
+                    AdjustZoom(+10);
+                    e.Handled = true;
+                    break;
+                case Key.Subtract:
+                case Key.OemMinus:
+                    AdjustZoom(-10);
+                    e.Handled = true;
+                    break;
+            }
+        }
+
+        private void PdfScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if ((Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
+                return;
+
+            e.Handled = true;
+            if (e.Delta > 0)
+                AdjustZoom(+10);
+            else if (e.Delta < 0)
+                AdjustZoom(-10);
+        }
+
+        private void AdjustZoom(double delta)
+        {
+            if (!_fitWidthReady || ZoomSlider == null)
+                return;
+
+            double target = ZoomSlider.Value + delta;
+            if (target < ZoomSlider.Minimum) target = ZoomSlider.Minimum;
+            if (target > ZoomSlider.Maximum) target = ZoomSlider.Maximum;
+            ZoomSlider.Value = target;
+        }
+
+        private void CopySelectedShape()
+        {
+            var canvas = GetCurrentInkCanvas();
+            if (canvas == null) return;
+
+            var element = _selectionTool.GetSelectedElement(canvas) as Shape;
+            if (element == null)
+                return;
+
+            try
+            {
+                _copiedShapeXaml = XamlWriter.Save(element);
+                double left = InkCanvas.GetLeft(element);
+                double top = InkCanvas.GetTop(element);
+                if (double.IsNaN(left)) left = 0;
+                if (double.IsNaN(top)) top = 0;
+                _copiedShapeLeft = left;
+                _copiedShapeTop = top;
+                _hasCopiedPosition = true;
+            }
+            catch
+            {
+                _copiedShapeXaml = null;
+                _hasCopiedPosition = false;
+            }
+        }
+
+        private void PasteCopiedShape()
+        {
+            if (string.IsNullOrEmpty(_copiedShapeXaml))
+                return;
+
+            var canvas = GetCurrentInkCanvas();
+            if (canvas == null)
+                return;
+
+            try
+            {
+                var element = XamlReader.Parse(_copiedShapeXaml) as UIElement;
+                if (element == null)
+                    return;
+
+                ApplyPasteOffset(element);
+                canvas.Children.Add(element);
+                RegisterShapeAddition(canvas, element);
+                _selectionTool.SelectElement(canvas, element);
+            }
+            catch
+            {
+                // 무시
+            }
+        }
+
+        private void ApplyPasteOffset(UIElement element)
+        {
+            const double offset = 12;
+            if (element is Line line)
+            {
+                line.X1 += offset;
+                line.X2 += offset;
+                line.Y1 += offset;
+                line.Y2 += offset;
+            }
+            else if (element is Polygon polygon)
+            {
+                for (int i = 0; i < polygon.Points.Count; i++)
+                {
+                    polygon.Points[i] = new Point(polygon.Points[i].X + offset, polygon.Points[i].Y + offset);
+                }
+            }
+            else
+            {
+                double left = _hasCopiedPosition ? _copiedShapeLeft : InkCanvas.GetLeft(element);
+                double top = _hasCopiedPosition ? _copiedShapeTop : InkCanvas.GetTop(element);
+                if (double.IsNaN(left)) left = 0;
+                if (double.IsNaN(top)) top = 0;
+                InkCanvas.SetLeft(element, left + offset);
+                InkCanvas.SetTop(element, top + offset);
+            }
+        }
+
+        private void PerformUndo()
+        {
+            if (_undoStack.Count == 0)
+                return;
+
+            var action = _undoStack.Pop();
+            _recordHistory = false;
+            action.Undo(this);
+            _recordHistory = true;
+            _redoStack.Push(action);
+        }
+
+        private void PerformRedo()
+        {
+            if (_redoStack.Count == 0)
+                return;
+
+            var action = _redoStack.Pop();
+            _recordHistory = false;
+            action.Redo(this);
+            _recordHistory = true;
+            _undoStack.Push(action);
+        }
+
+        private void PushUndoAction(IUndoRedoAction action)
+        {
+            if (!_recordHistory || action == null)
+                return;
+
+            _undoStack.Push(action);
+            _redoStack.Clear();
+        }
+
+        private void ClearHistory()
+        {
+            _undoStack.Clear();
+            _redoStack.Clear();
+        }
+
+        private void ShapeTool_ShapeCreated(InkCanvas canvas, UIElement element)
+        {
+            RegisterShapeAddition(canvas, element);
+        }
+
+        private void ShapeTool_ShapeRemoved(InkCanvas canvas, UIElement element)
+        {
+            if (canvas == null || element == null) return;
+            if (_selectionTool.GetSelectedElement(canvas) == element)
+            {
+                _selectionTool.ClearSelection(canvas);
+            }
+            RegisterShapeRemoval(canvas, element);
+        }
+
+        private void RegisterShapeAddition(InkCanvas canvas, UIElement element)
+        {
+            if (canvas == null || element == null)
+                return;
+
+            int pageIndex;
+            if (!TryGetPageIndex(canvas, out pageIndex))
+                return;
+
+            PushUndoAction(new ShapeAddedAction(pageIndex, element));
+        }
+
+        private void RegisterShapeRemoval(InkCanvas canvas, UIElement element)
+        {
+            if (canvas == null || element == null)
+                return;
+
+            int pageIndex;
+            if (!TryGetPageIndex(canvas, out pageIndex))
+                return;
+
+            PushUndoAction(new ShapeRemovedAction(pageIndex, element));
+        }
+
+        private void InkCanvas_StrokeCollected(object sender, InkCanvasStrokeCollectedEventArgs e)
+        {
+            if (!_recordHistory) return;
+            var canvas = sender as InkCanvas;
+            if (canvas == null) return;
+
+            int pageIndex;
+            if (!TryGetPageIndex(canvas, out pageIndex))
+                return;
+
+            PushUndoAction(new StrokeAddedAction(pageIndex, e.Stroke));
+        }
+
+        private void InkCanvas_StrokesChanged(object sender, StrokeCollectionChangedEventArgs e)
+        {
+            if (!_recordHistory) return;
+            if (e.Removed == null || e.Removed.Count == 0)
+                return;
+
+            var canvas = sender as InkCanvas;
+            if (canvas == null) return;
+
+            int pageIndex;
+            if (!TryGetPageIndex(canvas, out pageIndex))
+                return;
+
+            var removed = new List<Stroke>();
+            foreach (var stroke in e.Removed)
+            {
+                removed.Add(stroke);
+            }
+
+            if (removed.Count > 0)
+            {
+                PushUndoAction(new StrokeRemovedAction(pageIndex, removed));
+            }
+        }
+
+        private void RemoveShapeFromCanvas(InkCanvas canvas, UIElement element)
+        {
+            if (canvas == null || element == null) return;
+            if (_selectionTool.GetSelectedElement(canvas) == element)
+            {
+                _selectionTool.ClearSelection(canvas);
+            }
+            canvas.Children.Remove(element);
+        }
+
+        private void AddShapeToCanvas(InkCanvas canvas, UIElement element)
+        {
+            if (canvas == null || element == null) return;
+            if (!canvas.Children.Contains(element))
+            {
+                canvas.Children.Add(element);
+            }
+        }
+
+        private interface IUndoRedoAction
+        {
+            void Undo(MainWindow window);
+            void Redo(MainWindow window);
+        }
+
+        private class StrokeAddedAction : IUndoRedoAction
+        {
+            private readonly int _pageIndex;
+            private readonly Stroke _stroke;
+
+            public StrokeAddedAction(int pageIndex, Stroke stroke)
+            {
+                _pageIndex = pageIndex;
+                _stroke = stroke;
+            }
+
+            public void Undo(MainWindow window)
+            {
+                var canvas = window.GetInkCanvas(_pageIndex);
+                canvas?.Strokes.Remove(_stroke);
+            }
+
+            public void Redo(MainWindow window)
+            {
+                var canvas = window.GetInkCanvas(_pageIndex);
+                canvas?.Strokes.Add(_stroke);
+            }
+        }
+
+        private class StrokeRemovedAction : IUndoRedoAction
+        {
+            private readonly int _pageIndex;
+            private readonly List<Stroke> _strokes;
+
+            public StrokeRemovedAction(int pageIndex, List<Stroke> strokes)
+            {
+                _pageIndex = pageIndex;
+                _strokes = strokes;
+            }
+
+            public void Undo(MainWindow window)
+            {
+                var canvas = window.GetInkCanvas(_pageIndex);
+                if (canvas == null) return;
+                foreach (var stroke in _strokes)
+                {
+                    canvas.Strokes.Add(stroke);
+                }
+            }
+
+            public void Redo(MainWindow window)
+            {
+                var canvas = window.GetInkCanvas(_pageIndex);
+                if (canvas == null) return;
+                foreach (var stroke in _strokes)
+                {
+                    canvas.Strokes.Remove(stroke);
+                }
+            }
+        }
+
+        private class ShapeAddedAction : IUndoRedoAction
+        {
+            private readonly int _pageIndex;
+            private readonly UIElement _element;
+
+            public ShapeAddedAction(int pageIndex, UIElement element)
+            {
+                _pageIndex = pageIndex;
+                _element = element;
+            }
+
+            public void Undo(MainWindow window)
+            {
+                var canvas = window.GetInkCanvas(_pageIndex);
+                window.RemoveShapeFromCanvas(canvas, _element);
+            }
+
+            public void Redo(MainWindow window)
+            {
+                var canvas = window.GetInkCanvas(_pageIndex);
+                window.AddShapeToCanvas(canvas, _element);
+            }
+        }
+
+        private class ShapeRemovedAction : IUndoRedoAction
+        {
+            private readonly int _pageIndex;
+            private readonly UIElement _element;
+
+            public ShapeRemovedAction(int pageIndex, UIElement element)
+            {
+                _pageIndex = pageIndex;
+                _element = element;
+            }
+
+            public void Undo(MainWindow window)
+            {
+                var canvas = window.GetInkCanvas(_pageIndex);
+                window.AddShapeToCanvas(canvas, _element);
+            }
+
+            public void Redo(MainWindow window)
+            {
+                var canvas = window.GetInkCanvas(_pageIndex);
+                window.RemoveShapeFromCanvas(canvas, _element);
             }
         }
 

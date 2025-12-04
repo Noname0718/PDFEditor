@@ -22,6 +22,9 @@ namespace PDFEditor.Shapes
     {
         private const string ShapeElementTag = "ShapeToolElement";
 
+        public event Action<InkCanvas, UIElement> ShapeCreated;
+        public event Action<InkCanvas, UIElement> ShapeRemoved;
+
         public ShapeType CurrentShape { get; private set; } = ShapeType.None;
         public Brush StrokeBrush { get; private set; } = Brushes.Black;
         public double StrokeThickness { get; private set; } = 3.0;
@@ -100,6 +103,7 @@ namespace PDFEditor.Shapes
 
             state.PreviewShape = shape;
             canvas.Children.Add(shape);
+            ShapeCreated?.Invoke(canvas, shape);
 
             // 위치/크기는 MouseMove에서만 결정
             canvas.CaptureMouse();
@@ -248,6 +252,7 @@ namespace PDFEditor.Shapes
             if (shape == null) return;
 
             canvas.Children.Remove(shape);
+            ShapeRemoved?.Invoke(canvas, shape);
         }
 
         private Shape FindShapeAtPoint(InkCanvas canvas, Point canvasPoint)

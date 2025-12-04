@@ -93,7 +93,7 @@ namespace PDFEditor.Shapes
             }
             else
             {
-                ClearSelection(state);
+                ClearSelectionInternal(state);
             }
         }
 
@@ -118,7 +118,7 @@ namespace PDFEditor.Shapes
             }
         }
 
-        private void ClearSelection(SelectionState state)
+        private void ClearSelectionInternal(SelectionState state)
         {
             state.IsDragging = false;
 
@@ -229,6 +229,37 @@ namespace PDFEditor.Shapes
 
                 InkCanvas.SetLeft(element, left + delta.X);
                 InkCanvas.SetTop(element, top + delta.Y);
+            }
+        }
+
+        public UIElement GetSelectedElement(InkCanvas canvas)
+        {
+            if (canvas == null) return null;
+            SelectionState state;
+            if (_states.TryGetValue(canvas, out state))
+            {
+                return state.SelectedElement;
+            }
+            return null;
+        }
+
+        public void SelectElement(InkCanvas canvas, UIElement element)
+        {
+            if (canvas == null) return;
+            SelectionState state;
+            if (_states.TryGetValue(canvas, out state))
+            {
+                SetSelection(state, element);
+            }
+        }
+
+        public void ClearSelection(InkCanvas canvas)
+        {
+            if (canvas == null) return;
+            SelectionState state;
+            if (_states.TryGetValue(canvas, out state))
+            {
+                ClearSelectionInternal(state);
             }
         }
     }
