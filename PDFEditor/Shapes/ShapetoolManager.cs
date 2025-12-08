@@ -20,7 +20,7 @@ namespace PDFEditor.Shapes
 
     public class ShapeToolManager
     {
-        private const string ShapeElementTag = "ShapeToolElement";
+        internal const string ShapeElementTag = "ShapeToolElement";
 
         public event Action<InkCanvas, UIElement> ShapeCreated;
         public event Action<InkCanvas, UIElement> ShapeRemoved;

@@ -35,10 +35,15 @@ namespace PDFEditor
         private Stack<IUndoRedoAction> _undoStack = new Stack<IUndoRedoAction>();
         private Stack<IUndoRedoAction> _redoStack = new Stack<IUndoRedoAction>();
         private bool _recordHistory = true;
-        private string _copiedShapeXaml = null;
-        private double _copiedShapeLeft = 0;
-        private double _copiedShapeTop = 0;
-        private bool _hasCopiedPosition = false;
+        private class CopiedShapeInfo
+        {
+            public string Xaml;
+            public double Left;
+            public double Top;
+        }
+
+        private List<CopiedShapeInfo> _copiedShapes = new List<CopiedShapeInfo>();
+        private List<Stroke> _copiedStrokes = new List<Stroke>();
         public MainWindow()
         {
             InitializeComponent();
@@ -96,8 +101,8 @@ namespace PDFEditor
             _penCursorManager.Clear();
             _inkCanvasPageIndex.Clear();
             ClearHistory();
-            _copiedShapeXaml = null;
-            _hasCopiedPosition = false;
+            _copiedShapes.Clear();
+            _copiedStrokes.Clear();
 
             // 줌 초기화
             ZoomTransform.ScaleX = 1.0;
@@ -636,39 +641,53 @@ namespace PDFEditor
         {
             ModifierKeys mods = Keyboard.Modifiers;
             bool ctrl = (mods & ModifierKeys.Control) == ModifierKeys.Control;
-            if (!ctrl) return;
-
-            switch (e.Key)
+            if (ctrl)
             {
-                case Key.Z:
-                    if ((mods & ModifierKeys.Shift) == ModifierKeys.Shift)
-                    {
-                        PerformRedo();
-                    }
-                    else
-                    {
-                        PerformUndo();
-                    }
-                    e.Handled = true;
-                    break;
-                case Key.C:
-                    CopySelectedShape();
-                    e.Handled = true;
-                    break;
-                case Key.V:
-                    PasteCopiedShape();
-                    e.Handled = true;
-                    break;
-                case Key.Add:
-                case Key.OemPlus:
-                    AdjustZoom(+10);
-                    e.Handled = true;
-                    break;
-                case Key.Subtract:
-                case Key.OemMinus:
-                    AdjustZoom(-10);
-                    e.Handled = true;
-                    break;
+                switch (e.Key)
+                {
+                    case Key.Z:
+                        if ((mods & ModifierKeys.Shift) == ModifierKeys.Shift)
+                        {
+                            PerformRedo();
+                        }
+                        else
+                        {
+                            PerformUndo();
+                        }
+                        e.Handled = true;
+                        break;
+                    case Key.C:
+                        CopySelectedShape();
+                        e.Handled = true;
+                        break;
+                    case Key.V:
+                        PasteCopiedShape();
+                        e.Handled = true;
+                        break;
+                    case Key.Add:
+                    case Key.OemPlus:
+                        AdjustZoom(+10);
+                        e.Handled = true;
+                        break;
+                    case Key.Subtract:
+                    case Key.OemMinus:
+                        AdjustZoom(-10);
+                        e.Handled = true;
+                        break;
+                }
+            }
+
+            if (e.Handled)
+                return;
+
+            if (e.Key == Key.Delete || e.Key == Key.Back)
+            {
+                var focusedElement = FocusManager.GetFocusedElement(this);
+                if (focusedElement is TextBoxBase || focusedElement is PasswordBox)
+                    return;
+
+                DeleteCurrentSelection();
+                e.Handled = true;
             }
         }
 
@@ -700,55 +719,193 @@ namespace PDFEditor
             var canvas = GetCurrentInkCanvas();
             if (canvas == null) return;
 
-            var element = _selectionTool.GetSelectedElement(canvas) as Shape;
-            if (element == null)
+            var elements = _selectionTool.GetSelectedElementsSnapshot(canvas);
+            var strokes = _selectionTool.GetSelectedStrokesSnapshot(canvas);
+            if (elements.Count == 0 && strokes.Count == 0)
                 return;
 
-            try
+            var copiedShapes = new List<CopiedShapeInfo>();
+            foreach (var element in elements)
             {
-                _copiedShapeXaml = XamlWriter.Save(element);
-                double left = InkCanvas.GetLeft(element);
-                double top = InkCanvas.GetTop(element);
-                if (double.IsNaN(left)) left = 0;
-                if (double.IsNaN(top)) top = 0;
-                _copiedShapeLeft = left;
-                _copiedShapeTop = top;
-                _hasCopiedPosition = true;
+                if (element == null)
+                    continue;
+
+                try
+                {
+                    var info = new CopiedShapeInfo
+                    {
+                        Xaml = XamlWriter.Save(element)
+                    };
+                    var topLeft = GetElementTopLeftOnCanvas(canvas, element);
+                    info.Left = topLeft.X;
+                    info.Top = topLeft.Y;
+                    copiedShapes.Add(info);
+                }
+                catch
+                {
+                    // skip element
+                }
             }
-            catch
+
+            var copiedStrokes = new List<Stroke>();
+            foreach (var stroke in strokes)
             {
-                _copiedShapeXaml = null;
-                _hasCopiedPosition = false;
+                if (stroke == null)
+                    continue;
+                copiedStrokes.Add(stroke.Clone());
             }
+
+            if (copiedShapes.Count == 0 && copiedStrokes.Count == 0)
+                return;
+
+            _copiedShapes = copiedShapes;
+            _copiedStrokes = copiedStrokes;
         }
 
         private void PasteCopiedShape()
         {
-            if (string.IsNullOrEmpty(_copiedShapeXaml))
+            if ((_copiedShapes == null || _copiedShapes.Count == 0) &&
+                (_copiedStrokes == null || _copiedStrokes.Count == 0))
                 return;
 
             var canvas = GetCurrentInkCanvas();
             if (canvas == null)
                 return;
 
-            try
-            {
-                var element = XamlReader.Parse(_copiedShapeXaml) as UIElement;
-                if (element == null)
-                    return;
+            var newElements = new List<UIElement>();
+            var newStrokes = new List<Stroke>();
 
-                ApplyPasteOffset(element);
-                canvas.Children.Add(element);
-                RegisterShapeAddition(canvas, element);
-                _selectionTool.SelectElement(canvas, element);
-            }
-            catch
+            if (_copiedShapes != null)
             {
-                // 무시
+                foreach (var info in _copiedShapes)
+                {
+                    if (info == null || string.IsNullOrEmpty(info.Xaml))
+                        continue;
+
+                    try
+                    {
+                        var element = XamlReader.Parse(info.Xaml) as UIElement;
+                        if (element == null)
+                            continue;
+
+                        ApplyPasteOffset(element, info);
+                        canvas.Children.Add(element);
+                        newElements.Add(element);
+                    }
+                    catch
+                    {
+                        // ignore element
+                    }
+                }
+            }
+
+            if (_copiedStrokes != null)
+            {
+                foreach (var template in _copiedStrokes)
+                {
+                    if (template == null)
+                        continue;
+
+                    var stroke = template.Clone();
+                    TranslateStroke(stroke, 12, 12);
+                    canvas.Strokes.Add(stroke);
+                    newStrokes.Add(stroke);
+                }
+            }
+
+            if (newElements.Count == 0 && newStrokes.Count == 0)
+                return;
+
+            RegisterGroupedAddition(canvas, newElements, newStrokes);
+            _selectionTool.SelectItems(canvas, newElements, newStrokes);
+        }
+
+        private void DeleteCurrentSelection()
+        {
+            var canvas = GetCurrentInkCanvas();
+            if (canvas == null)
+                return;
+
+            var selectedElements = _selectionTool.GetSelectedElementsSnapshot(canvas);
+            var selectedStrokes = _selectionTool.GetSelectedStrokesSnapshot(canvas);
+            if (selectedElements.Count == 0 && selectedStrokes.Count == 0)
+                return;
+
+            int pageIndex;
+            if (!TryGetPageIndex(canvas, out pageIndex))
+                return;
+
+            var actions = new List<IUndoRedoAction>();
+
+            foreach (var element in selectedElements)
+            {
+                if (element == null)
+                    continue;
+
+                if (!canvas.Children.Contains(element))
+                    continue;
+
+                canvas.Children.Remove(element);
+                actions.Add(new ShapeRemovedAction(pageIndex, element));
+            }
+
+            if (selectedStrokes.Count > 0)
+            {
+                var strokesToRemove = new List<Stroke>();
+                foreach (var stroke in selectedStrokes)
+                {
+                    if (stroke != null && canvas.Strokes.Contains(stroke))
+                    {
+                        strokesToRemove.Add(stroke);
+                    }
+                }
+
+                if (strokesToRemove.Count > 0)
+                {
+                    foreach (var stroke in strokesToRemove)
+                    {
+                        canvas.Strokes.Remove(stroke);
+                    }
+                    actions.Add(new StrokeRemovedAction(pageIndex, strokesToRemove));
+                }
+            }
+
+            if (actions.Count > 0)
+            {
+                PushUndoAction(actions.Count == 1 ? actions[0] : new CompositeAction(actions));
+                _selectionTool.ClearSelection(canvas);
             }
         }
 
-        private void ApplyPasteOffset(UIElement element)
+        private Point GetElementTopLeftOnCanvas(InkCanvas canvas, UIElement element)
+        {
+            double left = InkCanvas.GetLeft(element);
+            double top = InkCanvas.GetTop(element);
+            if (double.IsNaN(left) || double.IsNaN(top))
+            {
+                try
+                {
+                    Rect bounds = VisualTreeHelper.GetDescendantBounds(element);
+                    GeneralTransform transform = element.TransformToVisual(canvas);
+                    if (transform != null)
+                    {
+                        bounds = transform.TransformBounds(bounds);
+                        if (double.IsNaN(left)) left = bounds.X;
+                        if (double.IsNaN(top)) top = bounds.Y;
+                    }
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+            return new Point(left, top);
+        }
+
+        private void ApplyPasteOffset(UIElement element, CopiedShapeInfo info)
         {
             const double offset = 12;
             if (element is Line line)
@@ -767,12 +924,58 @@ namespace PDFEditor
             }
             else
             {
-                double left = _hasCopiedPosition ? _copiedShapeLeft : InkCanvas.GetLeft(element);
-                double top = _hasCopiedPosition ? _copiedShapeTop : InkCanvas.GetTop(element);
+                double left = info?.Left ?? 0;
+                double top = info?.Top ?? 0;
                 if (double.IsNaN(left)) left = 0;
                 if (double.IsNaN(top)) top = 0;
                 InkCanvas.SetLeft(element, left + offset);
                 InkCanvas.SetTop(element, top + offset);
+            }
+        }
+
+        private void TranslateStroke(Stroke stroke, double offsetX, double offsetY)
+        {
+            if (stroke == null)
+                return;
+
+            Matrix matrix = Matrix.Identity;
+            matrix.Translate(offsetX, offsetY);
+            stroke.Transform(matrix, false);
+        }
+
+        private void RegisterGroupedAddition(InkCanvas canvas, List<UIElement> elements, List<Stroke> strokes)
+        {
+            if (canvas == null)
+                return;
+
+            int pageIndex;
+            if (!TryGetPageIndex(canvas, out pageIndex))
+                return;
+
+            var actions = new List<IUndoRedoAction>();
+            if (elements != null)
+            {
+                foreach (var element in elements)
+                {
+                    if (element == null)
+                        continue;
+                    actions.Add(new ShapeAddedAction(pageIndex, element));
+                }
+            }
+
+            if (strokes != null)
+            {
+                foreach (var stroke in strokes)
+                {
+                    if (stroke == null)
+                        continue;
+                    actions.Add(new StrokeAddedAction(pageIndex, stroke));
+                }
+            }
+
+            if (actions.Count > 0)
+            {
+                PushUndoAction(actions.Count == 1 ? actions[0] : new CompositeAction(actions));
             }
         }
 
@@ -1018,6 +1221,34 @@ namespace PDFEditor
             {
                 var canvas = window.GetInkCanvas(_pageIndex);
                 window.RemoveShapeFromCanvas(canvas, _element);
+            }
+        }
+
+        private class CompositeAction : IUndoRedoAction
+        {
+            private readonly List<IUndoRedoAction> _actions;
+
+            public CompositeAction(IEnumerable<IUndoRedoAction> actions)
+            {
+                _actions = actions != null ? new List<IUndoRedoAction>(actions) : new List<IUndoRedoAction>();
+            }
+
+            public void Undo(MainWindow window)
+            {
+                if (window == null) return;
+                for (int i = _actions.Count - 1; i >= 0; i--)
+                {
+                    _actions[i].Undo(window);
+                }
+            }
+
+            public void Redo(MainWindow window)
+            {
+                if (window == null) return;
+                foreach (var action in _actions)
+                {
+                    action.Redo(window);
+                }
             }
         }
 

@@ -71,6 +71,7 @@
       <SubType>Designer</SubType>
     </ApplicationDefinition>
     <Compile Include="Shapes\SelectionAdorner.cs" />
+    <Compile Include="Shapes\GroupSelectionAdorner.cs" />
     <Compile Include="Shapes\SelectionToolManager.cs" />
     <Compile Include="Shapes\ShapetoolManager.cs" />
     <Page Include="MainWindow.xaml">
