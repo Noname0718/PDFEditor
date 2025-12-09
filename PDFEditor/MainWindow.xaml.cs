@@ -4,7 +4,6 @@ using PDFEditor.Shapes;
 using PDFEditor.Text;
 using PdfiumViewer;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -19,39 +18,59 @@ using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 using System.Xml;
 using System.Xml.Linq;
 
 namespace PDFEditor
 {
+    /// <summary>
+    /// 메인 창은 다음 역할을 담당한다.
+    ///  1) PdfiumViewer로 PDF를 페이지 단위로 렌더링하고 InkCanvas를 페이지별로 구성
+    ///  2) 펜/도형/텍스트 등의 도구 선택과 상태를 공유하고 히스토리를 기록
+    ///  3) 주석 저장/불러오기/내보내기 및 줌/페이지 전환과 같은 UI 상호작용 관리
+    /// 각 기능은 별도의 *Manager* 클래스(TextToolManager 등)에서 실제 동작을 수행하고,
+    /// MainWindow는 서로 다른 도구가 동시에 충돌하지 않도록 조율하는 허브 역할을 한다.
+    /// </summary>
     public partial class MainWindow : Window
     {
-        private PdfDocument _pdf;                                  // PdfiumViewer 문서 핸들
-        private int _currentPage = 0;                              // 현재 페이지 (0-based)
-        private double _baseScale = 1.0;                           // 폭 맞춤 기준 배율
-        private bool _fitWidthReady = false;                      // 기준 배율 계산 여부
-        private double _pageImageWidth = 0;                       // 첫 페이지 실제 픽셀 폭
-        private InkToolManager _inkTool = new InkToolManager();    // 펜/형광펜/지우개 제어
-        private Dictionary<int, InkCanvas> _pageInkCanvases = new Dictionary<int, InkCanvas>(); // 페이지별 InkCanvas
-        private ShapeToolManager _shapeTool = new ShapeToolManager(); // 도형 그리기/지우기 제어
-        private SelectionToolManager _selectionTool = new SelectionToolManager();
-        private TextToolManager _textTool = new TextToolManager();
-        private PenCursorManager _penCursorManager = new PenCursorManager();
-        private AreaEraserManager _areaEraserManager = new AreaEraserManager();
-        private Dictionary<InkCanvas, int> _inkCanvasPageIndex = new Dictionary<InkCanvas, int>();
-        private List<System.Drawing.SizeF> _pageSizesPoints = new List<System.Drawing.SizeF>();
-        private string _currentPdfPath;
-        private string _currentAnnotationPath;
-        private double _textDefaultFontSize = 18;
-        private Color _textDefaultFontColor = Colors.Black;
-        private const double MinTextFontSize = 8;
-        private const double MaxTextFontSize = 96;
-        private const double TextFontStep = 2;
-        private static readonly Guid StrokeIdProperty = new Guid("F1F5A601-6CF2-4A0F-9BD2-1A96D4BB3F25");
-        private Stack<IUndoRedoAction> _undoStack = new Stack<IUndoRedoAction>();
-        private Stack<IUndoRedoAction> _redoStack = new Stack<IUndoRedoAction>();
-        private bool _recordHistory = true;
+        // ----------------------------------------------------------------------------------------------------
+        //  PDF/페이지 상태 관리 필드
+        // ----------------------------------------------------------------------------------------------------
+        private PdfDocument _pdf;                                  // 현재 열려 있는 PDF 문서 핸들 (PdfiumViewer)
+        private int _currentPage = 0;                              // 현재 보여지는 페이지 (0-based index)
+        private double _baseScale = 1.0;                           // 폭 맞춤 계산 시 기준 배율
+        private bool _fitWidthReady = false;                      // _baseScale 계산이 완료되었는지 여부
+        private double _pageImageWidth = 0;                       // 첫 페이지의 렌더링 폭 (줌 기준)
+        private readonly Dictionary<int, InkCanvas> _pageInkCanvases = new Dictionary<int, InkCanvas>(); // 페이지별 InkCanvas 참조
+        private readonly Dictionary<InkCanvas, int> _inkCanvasPageIndex = new Dictionary<InkCanvas, int>(); // InkCanvas→페이지 매핑
+        private readonly List<System.Drawing.SizeF> _pageSizesPoints = new List<System.Drawing.SizeF>(); // PDF 좌표계 크기(72dpi)
+        private string _currentPdfPath;                            // 현재 열려 있는 PDF 경로 (주석 저장 시 기본값)
+        private string _currentAnnotationPath;                     // 마지막으로 저장/불러온 주석 파일 경로
+
+        // ----------------------------------------------------------------------------------------------------
+        //  도구/커서/텍스트 상태 관리 필드
+        // ----------------------------------------------------------------------------------------------------
+        private readonly InkToolManager _inkTool = new InkToolManager();            // 펜/형광펜/지우개
+        private readonly ShapeToolManager _shapeTool = new ShapeToolManager();      // 도형 생성 및 삭제
+        private readonly SelectionToolManager _selectionTool = new SelectionToolManager(); // InkCanvas 선택
+        private readonly TextToolManager _textTool = new TextToolManager();         // 텍스트 박스 생성/편집
+        private readonly PenCursorManager _penCursorManager = new PenCursorManager();       // 펜 커서 미리보기
+        private readonly AreaEraserManager _areaEraserManager = new AreaEraserManager();   // 도형/텍스트 일괄 지우개
+        private double _textDefaultFontSize = 18;                    // 새 텍스트 박스 기본 폰트 크기
+        private Color _textDefaultFontColor = Colors.Black;          // 새 텍스트 박스 기본 글자색
+        private const double MinTextFontSize = 8;                    // UI에서 허용하는 글꼴 최소값
+        private const double MaxTextFontSize = 96;                   // UI에서 허용하는 글꼴 최대값
+        private const double TextFontStep = 2;                       // 버튼 조절 시 증가/감소량
+        private static readonly Guid StrokeIdProperty = new Guid("F1F5A601-6CF2-4A0F-9BD2-1A96D4BB3F25"); // Stroke GUID 저장 키
+
+        // ----------------------------------------------------------------------------------------------------
+        //  Undo/Redo 등 기록 장치
+        // ----------------------------------------------------------------------------------------------------
+        private readonly Stack<IUndoRedoAction> _undoStack = new Stack<IUndoRedoAction>();
+        private readonly Stack<IUndoRedoAction> _redoStack = new Stack<IUndoRedoAction>();
+        private bool _recordHistory = true;                         // 대량 작업 시 히스토리 중단 플래그
         private class CopiedShapeInfo
         {
             public string Xaml;
@@ -61,6 +80,12 @@ namespace PDFEditor
 
         private List<CopiedShapeInfo> _copiedShapes = new List<CopiedShapeInfo>();
         private List<Stroke> _copiedStrokes = new List<Stroke>();
+        /// <summary>
+        /// 생성자에서 창 이벤트와 각 도구 매니저의 콜백을 모두 연결한다.
+        ///  - SizeChanged/PreviewKeyDown 등 윈도우 레벨 이벤트
+        ///  - 각 매니저(TextToolManager 등)의 이벤트를 MainWindow 핸들러에 연결
+        ///  - 기본 펜 두께/커서 상태/텍스트 스타일 초기화
+        /// </summary>
         public MainWindow()
         {
             InitializeComponent();
@@ -80,6 +105,7 @@ namespace PDFEditor
             _areaEraserManager.ElementErased += AreaEraser_ElementErased;
             _areaEraserManager.SetRadius(ThicknessSlider?.Value ?? 3.0);
             InitializeTextToolDefaults();
+            UpdateShapeToolAppearance(GetSelectedDrawingColor(), GetSelectedThickness());
         }
 
         /// <summary>
@@ -98,6 +124,10 @@ namespace PDFEditor
             ShowOpenPdfDialog();
         }
 
+        /// <summary>
+        /// 표준 OpenFileDialog를 띄워 PDF를 선택한 뒤 LoadPdfFromPath를 호출한다.
+        /// 이 메서드는 버튼/단축키 등 다양한 UI 진입점을 공유하기 위해 분리되어 있다.
+        /// </summary>
         private void ShowOpenPdfDialog()
         {
             var dlg = new OpenFileDialog
@@ -111,6 +141,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// PDF가 열려 있을 때 현재 작업 내용을 .pdfanno 파일로 내보내기 위한 SaveFileDialog를 연다.
+        /// 파일이 선택되면 실제 직렬화는 <see cref="SaveAnnotationsToFile(string)"/>가 담당한다.
+        /// </summary>
         private void SaveAnnotation_Click(object sender, RoutedEventArgs e)
         {
             if (_pdf == null)
@@ -133,6 +167,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// .pdfanno 파일을 선택해 현재 PDF에 덮어쓰는 OpenFileDialog 핸들러.
+        /// PDF가 닫혀 있다면 LoadAnnotationsFromFile 내부에서 오류 메시지를 안내한다.
+        /// </summary>
         private void LoadAnnotation_Click(object sender, RoutedEventArgs e)
         {
             var dlg = new OpenFileDialog
@@ -146,6 +184,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// 사용자가 선택한 경로를 검증하고 PdfiumViewer로 문서를 로드한 뒤
+        /// 페이지 렌더링/도구 상태 초기화/폭 맞춤 계산까지 한 번에 처리한다.
+        /// </summary>
         private void LoadPdfFromPath(string path)
         {
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
@@ -182,6 +224,11 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// 프로젝트 전반에서 공유하는 "전체 지우기" 버튼 핸들러.
+        /// 모든 페이지의 InkCanvas에서 직렬화 가능한 요소(Text/Shape)와 스트로크를 제거하고
+        /// Undo/Redo 스택까지 비워 일관된 상태를 유지한다.
+        /// </summary>
         private void ClearAllAnnotations_Click(object sender, RoutedEventArgs e)
         {
             if (_pdf == null || _pageInkCanvases.Count == 0)
@@ -222,6 +269,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// 현재 페이지 컬렉션을 이미지로 Flatten해 새 PDF로 저장하는 버튼 핸들러.
+        /// 내부적으로 <see cref="CaptureAnnotatedPages"/>로 화면 이미지를 가져와 <see cref="WriteFlattenedPdf"/>로 출력한다.
+        /// </summary>
         private void ExportAnnotatedPdf_Click(object sender, RoutedEventArgs e)
         {
             if (_pdf == null)
@@ -257,6 +308,12 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// 화면에 표시된 InkCanvas와 백그라운드 이미지를 합성해 페이지별 비트맵을 만든다.
+        /// 1) PdfiumViewer로 원본 페이지를 렌더링하고
+        /// 2) 도형/텍스트/잉크가 포함된 가상 Grid에 붙인 뒤
+        /// 3) RenderTargetBitmap으로 픽셀 데이터를 추출하여 JPEG 스트림으로 변환한다.
+        /// </summary>
         private List<AnnotatedPageImage> CaptureAnnotatedPages()
         {
             var images = new List<AnnotatedPageImage>();
@@ -311,6 +368,7 @@ namespace PDFEditor
                     container.Children.Add(viewbox);
                 }
 
+                // Grid는 Viewbox 포함 자식들을 모두 렌더링해야 하므로 Arrange/Measure를 직접 호출한다.
                 container.Measure(new Size(width, height));
                 container.Arrange(new Rect(0, 0, width, height));
                 container.UpdateLayout();
@@ -348,6 +406,10 @@ namespace PDFEditor
             return images;
         }
 
+        /// <summary>
+        /// PdfiumViewer가 반환한 GDI+ 이미지(Stream) 를 WPF BitmapSource로 변환한다.
+        /// 내보내기에서 여러 dpi 값을 사용할 수 있으므로 매 호출마다 dpi를 전달받는다.
+        /// </summary>
         private BitmapSource RenderPdfPageImage(int pageIndex, int dpi)
         {
             if (_pdf == null) return null;
@@ -357,6 +419,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// CaptureAnnotatedPages에서 얻은 이미지를 순수 PDF 명세로 직접 작성한다.
+        /// 외부 PDF 라이브러리를 다시 참조하지 않고 Catalog/Pages/Page 객체와 이미지 스트림을 수동으로 기록한다.
+        /// </summary>
         private void WriteFlattenedPdf(string path, List<AnnotatedPageImage> pages)
         {
             using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
@@ -456,6 +522,11 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// 현재까지 각 페이지에 누적된 잉크/도형/텍스트 정보를 XML 구조로 직렬화해 저장한다.
+        ///  - InkCanvas.Strokes는 StrokeCollection을 MemoryStream에 저장 후 Base64로 저장
+        ///  - InkCanvas.Children 중 TextBox/Shape만 XAML 그대로 보관
+        /// </summary>
         private void SaveAnnotationsToFile(string path)
         {
             try
@@ -502,6 +573,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// .pdfanno 파일을 읽어 InkCanvas별로 잉크/도형/텍스트를 복원한다.
+        /// suppressPdfReload=true이면 PDF 본문은 그대로 두고 현재 페이지 구조에만 주석을 덮어쓴다.
+        /// </summary>
         private void LoadAnnotationsFromFile(string path, bool suppressPdfReload = false)
         {
             if (!File.Exists(path))
@@ -587,6 +662,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// InkCanvas의 StrokeCollection을 메모리 스트림에 쓰고 Base64 문자열로 반환한다.
+        /// 빈 컬렉션이면 null을 반환하여 XML 문서가 불필요하게 커지는 것을 방지한다.
+        /// </summary>
         private string SerializeStrokes(StrokeCollection strokes)
         {
             if (strokes == null || strokes.Count == 0)
@@ -599,6 +678,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// Base64 문자열을 StrokeCollection으로 되돌린다.
+        /// 저장된 내용이 없으면 null, 데이터가 손상되면 예외를 호출자에게 전달한다.
+        /// </summary>
         private StrokeCollection DeserializeStrokes(string base64)
         {
             if (string.IsNullOrWhiteSpace(base64))
@@ -611,6 +694,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// InkCanvas.Children 중에서 직렬화 대상(TextBox/Shape)만 골라 XAML을 CDATA로 포함시킨다.
+        /// 비어 있는 경우 null을 반환해 상위 XML에서 엘리먼트를 생략한다.
+        /// </summary>
         private XElement SerializeElements(InkCanvas canvas)
         {
             var elements = new XElement("Elements");
@@ -624,6 +711,10 @@ namespace PDFEditor
             return elements.HasElements ? elements : null;
         }
 
+        /// <summary>
+        /// XAML 문자열을 다시 UIElement 인스턴스로 복원한다.
+        /// TextBox/Shape 외에는 저장하지 않으므로 해당 타입으로 다시 생성되는 것이 보장된다.
+        /// </summary>
         private UIElement DeserializeElement(string xaml)
         {
             if (string.IsNullOrWhiteSpace(xaml))
@@ -636,6 +727,10 @@ namespace PDFEditor
             }
         }
 
+        /// <summary>
+        /// InkCanvas 자식 중 Text/Shape인지 검사하여 직렬화 여부를 결정한다.
+        /// 태그 값으로 도구에서 생성한 요소만 걸러내고, 페이지 프레임/스크롤 보조 요소는 제외한다.
+        /// </summary>
         private bool IsSerializableElement(UIElement element)
         {
             if (element is TextBox textBox)
@@ -652,8 +747,10 @@ namespace PDFEditor
         }
 
         /// <summary>
-        /// PDF 페이지 전체를 Image + InkCanvas 조합으로 메모리에 렌더링한다.
-        /// 페이지마다 InkCanvas를 따로 저장하여 도형/필기 상태를 유지.
+        /// PdfiumViewer가 제공하는 페이지 이미지를 반복 렌더링하여
+        ///  - 페이지별 Image + InkCanvas + Border 구조를 만들고
+        ///  - 각 InkCanvas를 도구 매니저에 등록한 뒤 Dictionaries에 저장한다.
+        /// 이 과정에서 줌 기준(_pageImageWidth)과 PDF 좌표 크기(_pageSizesPoints)도 함께 수집한다.
         /// </summary>
         private void RenderAllPages()
         {
@@ -662,7 +759,6 @@ namespace PDFEditor
             _penCursorManager.Clear();
             _inkCanvasPageIndex.Clear();
             _textTool.Clear();
-            _pageSizesPoints.Clear();
             _pageSizesPoints.Clear();
             ClearHistory();
             _copiedShapes.Clear();
@@ -724,18 +820,7 @@ namespace PDFEditor
                         Height = pageHeight,
                         ClipToBounds = true //필기 밖으로 나가는 부분 자르기
                     };
-                    ink.RequestBringIntoView += SuppressBringIntoView; // 페이지 클릭 시 자동 스크롤 방지
-                    ink.PreviewMouseDown += InkCanvas_PreviewMouseDown;
-                    ink.StrokeCollected += InkCanvas_StrokeCollected;
-                    ink.Strokes.StrokesChanged += InkCanvas_StrokesChanged;
-                    _inkTool.SetTool(_inkTool.CurrentTool, ink); // 현재 선택된 필기 도구 적용
-                    ApplyCurrentColorAndThicknessToInkCanvas(ink); // 색/두께 동기화
-
-                    _shapeTool.AttachCanvas(ink); // 도형 드로잉/지우기 이벤트 연결
-                    _selectionTool.AttachCanvas(ink); // 선택 도구 이벤트 연결
-                    _penCursorManager.AttachCanvas(ink); // 펜 위치 표시 연결
-                    _textTool.AttachCanvas(ink);
-                    _areaEraserManager.AttachCanvas(ink);
+                    AttachCanvasManagers(ink); // 입력 이벤트/툴 매니저 초기화
 
                     var pageGrid = new Grid 
                     {
@@ -748,15 +833,21 @@ namespace PDFEditor
 
                     var pageBorder = new Border
                     {
-                        Width = pageWidth, //패딩 포함한 "용지" 사이즈"
+                        Width = pageWidth,
                         Height = pageHeight,
-                        Background = Brushes.White,
-                        BorderBrush = Brushes.LightGray,
-                        BorderThickness = new Thickness(1),
-                        Margin = new Thickness(0, 10, 0, 10),
-                        Padding = new Thickness(0),
                         HorizontalAlignment = HorizontalAlignment.Center
                     };
+                    if (TryFindResource("PdfPageCardStyle") is Style cardStyle)
+                    {
+                        pageBorder.Style = cardStyle;
+                    }
+                    else
+                    {
+                        pageBorder.Background = Brushes.White;
+                        pageBorder.BorderBrush = Brushes.LightGray;
+                        pageBorder.BorderThickness = new Thickness(0.5);
+                        pageBorder.Margin = new Thickness(0, 0, 0, 10);
+                    }
                     pageBorder.RequestBringIntoView += SuppressBringIntoView;
 
             pageBorder.Child = pageGrid;
@@ -1117,25 +1208,17 @@ namespace PDFEditor
         {
             if (_inkTool == null)
                 return;
-        
+
             ComboBoxItem item = ColorComboBox.SelectedItem as ComboBoxItem;
             if (item == null || item.Tag == null)
                 return;
 
-            string colorName = item.Tag.ToString();                 // "Red", "Blue" 같은 문자열
+            string colorName = item.Tag.ToString();
             Color color = (Color)ColorConverter.ConvertFromString(colorName);
 
-            //상태만 먼저 저장
             _inkTool.SetColor(color, null);
-
-            var brush = new SolidColorBrush(color);
-            _shapeTool.SetStroke(brush, ThicknessSlider?.Value ?? 3.0);
-
-            // 모든 페이지의 InkCanvas에 적용
-            foreach (InkCanvas canvas in _pageInkCanvases.Values)
-            {
-                _inkTool.SetColor(color, canvas);
-            }
+            UpdateShapeToolAppearance(color, GetSelectedThickness());
+            ApplyDrawingSettingsToAllCanvases();
         }
 
         private void TextColorToolbarButton_Click(object sender, RoutedEventArgs e)
@@ -1266,62 +1349,94 @@ namespace PDFEditor
 
             double thickness = e.NewValue;
 
-            // 두께 상태를 InkToolManager에 반영
-            _inkTool.SetThickness(thickness,null);
-
-            Color color = Colors.Black;
-            ComboBoxItem colorItem = ColorComboBox.SelectedItem as ComboBoxItem;
-
-            if (colorItem != null && colorItem.Tag != null)
-            {
-                string colorName = colorItem.Tag.ToString();
-                color = (Color)ColorConverter.ConvertFromString(colorName);
-            }
-            _shapeTool.SetStroke(new SolidColorBrush(color), thickness);
+            // UI 상태를 즉시 갱신하여 새로 추가될 InkCanvas도 동일한 두께를 사용하게 한다.
+            _inkTool.SetThickness(thickness, null);
             _penCursorManager.SetThickness(thickness);
             _areaEraserManager.SetRadius(thickness);
 
-            // 모든 페이지의 InkCanvas에 적용
-            foreach (InkCanvas canvas in _pageInkCanvases.Values)
-            {
-                _inkTool.SetThickness(thickness, canvas);
-            }
+            ApplyDrawingSettingsToAllCanvases();
+            UpdateShapeToolAppearance(GetSelectedDrawingColor(), thickness);
 
-            // UI에 표시용 텍스트 업데이트
             if (ThicknessValueText != null)
             {
-                ThicknessValueText.Text = ((int)thickness).ToString() + "px";
+                string format = thickness < 1 ? "0.0#" : "0.#";
+                ThicknessValueText.Text = thickness.ToString(format) + "px";
             }
         }
 
         /// <summary>
-        /// 새로 생성된 InkCanvas에 현재 색상/두께를 동기화한다.
+        /// 현재 UI에서 선택된 펜/도형 색상을 반환한다. (콤보박스가 비어 있으면 검정색)
         /// </summary>
-        private void ApplyCurrentColorAndThicknessToInkCanvas(InkCanvas ink)
+        private Color GetSelectedDrawingColor()
+        {
+            if (ColorComboBox?.SelectedItem is ComboBoxItem item && item.Tag is string colorName)
+            {
+                return (Color)ColorConverter.ConvertFromString(colorName);
+            }
+            return Colors.Black;
+        }
+
+        /// <summary>
+        /// 두께 슬라이더 값이 없을 때도 안전하게 현재 두께 값을 읽는다.
+        /// </summary>
+        private double GetSelectedThickness()
+        {
+            return ThicknessSlider?.Value ?? _inkTool?.CurrentThickness ?? 3.0;
+        }
+
+        /// <summary>
+        /// InkCanvas 하나에 현재 선택된 펜 설정(색/두께)을 바로 적용한다.
+        /// </summary>
+        private void ApplyDrawingSettingsToCanvas(InkCanvas ink)
         {
             if (ink == null) return;
 
-            // 색상
-            Color color = Colors.Black;
-            ComboBoxItem colorItem = ColorComboBox.SelectedItem as ComboBoxItem;
-            if (colorItem != null && colorItem.Tag != null)
-            {
-                string colorName = colorItem.Tag.ToString();
-                color = (Color)ColorConverter.ConvertFromString(colorName);
-            }
+            var color = GetSelectedDrawingColor();
+            double thickness = GetSelectedThickness();
 
-            // 두께
-            double thickness = 3;
-            if (ThicknessSlider != null)
-            {
-                thickness = ThicknessSlider.Value;
-            }
-
-            // InkToolManager에 반영
             _inkTool.SetColor(color, ink);
             _inkTool.SetThickness(thickness, ink);
+        }
 
+        /// <summary>
+        /// 현재 로드된 모든 페이지 InkCanvas에 동일한 펜 설정을 반영한다.
+        /// </summary>
+        private void ApplyDrawingSettingsToAllCanvases()
+        {
+            foreach (var ink in _pageInkCanvases.Values)
+            {
+                ApplyDrawingSettingsToCanvas(ink);
+            }
+        }
+
+        /// <summary>
+        /// 도형 도구의 브러시/두께를 현재 펜 설정과 일치하도록 동기화한다.
+        /// </summary>
+        private void UpdateShapeToolAppearance(Color color, double thickness)
+        {
             _shapeTool.SetStroke(new SolidColorBrush(color), thickness);
+        }
+
+        /// <summary>
+        /// InkCanvas 생성 시 필요한 이벤트/도구 매니저를 한 곳에서 연결한다.
+        /// </summary>
+        private void AttachCanvasManagers(InkCanvas ink)
+        {
+            if (ink == null) return;
+
+            ink.RequestBringIntoView += SuppressBringIntoView;
+            ink.PreviewMouseDown += InkCanvas_PreviewMouseDown;
+            ink.StrokeCollected += InkCanvas_StrokeCollected;
+            ink.Strokes.StrokesChanged += InkCanvas_StrokesChanged;
+
+            _inkTool.SetTool(_inkTool.CurrentTool, ink);
+            ApplyDrawingSettingsToCanvas(ink);
+
+            _shapeTool.AttachCanvas(ink);
+            _selectionTool.AttachCanvas(ink);
+            _penCursorManager.AttachCanvas(ink);
+            _textTool.AttachCanvas(ink);
+            _areaEraserManager.AttachCanvas(ink);
         }
 
         private void InitializeTextToolDefaults()

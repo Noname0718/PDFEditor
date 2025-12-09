@@ -58,6 +58,9 @@ namespace PDFEditor.Text
             _activeBorderBrush.Freeze();
         }
 
+        /// <summary>
+        /// InkCanvas에 PreviewMouseDown 이벤트를 연결해 클릭으로 TextBox를 추가할 수 있게 한다.
+        /// </summary>
         public void AttachCanvas(InkCanvas canvas)
         {
             if (canvas == null || _canvasStates.ContainsKey(canvas))
@@ -68,6 +71,10 @@ namespace PDFEditor.Text
             _canvasStates[canvas] = state;
         }
 
+        /// <summary>
+        /// 모든 캔버스/텍스트박스 상태를 정리하고 이벤트를 해제한다.
+        /// 주석을 다른 PDF에 적용할 때 호출된다.
+        /// </summary>
         public void Clear()
         {
             foreach (var kv in _canvasStates)
@@ -91,6 +98,10 @@ namespace PDFEditor.Text
             _dragTarget = null;
         }
 
+        /// <summary>
+        /// 텍스트 도구가 선택되었는지 여부를 알린다.
+        /// 비활성화될 때는 편집 중인 박스를 자동으로 커밋한다.
+        /// </summary>
         public void SetActive(bool active)
         {
             if (!active)
@@ -102,6 +113,10 @@ namespace PDFEditor.Text
             UpdateBorder(_activeTextBox);
         }
 
+        /// <summary>
+        /// 새 텍스트 박스에 사용할 기본 폰트 크기를 지정한다.
+        /// 최소값 이하가 들어오면 안전한 값으로 대체한다.
+        /// </summary>
         public void SetDefaultFontSize(double size)
         {
             if (size <= 0)
@@ -109,6 +124,9 @@ namespace PDFEditor.Text
             DefaultFontSize = size;
         }
 
+        /// <summary>
+        /// 기본 전경색(글자색)을 지정하고 Freezable 속성을 최대한 활용한다.
+        /// </summary>
         public void SetDefaultForeground(Brush brush)
         {
             if (brush == null)
@@ -119,11 +137,17 @@ namespace PDFEditor.Text
                 DefaultForeground.Freeze();
         }
 
+        /// <summary>
+        /// 사용자가 마지막으로 선택한 TextBox를 반환한다.
+        /// </summary>
         public TextBox GetActiveTextBox()
         {
             return _activeTextBox;
         }
 
+        /// <summary>
+        /// 외부에서 특정 TextBox에 대해 즉시 편집 모드를 시작하고 필요 시 전체 선택한다.
+        /// </summary>
         public void BeginEditingExistingTextBox(TextBox textBox, bool selectAll)
         {
             if (textBox == null)
@@ -133,11 +157,18 @@ namespace PDFEditor.Text
             BeginEditing(textBox, selectAll);
         }
 
+        /// <summary>
+        /// 현재 편집 중인 TextBox를 반환한다. 없으면 null.
+        /// </summary>
         public TextBox GetEditingTextBox()
         {
             return _editingTextBox;
         }
 
+        /// <summary>
+        /// Enter/Escape/Ctrl+Enter 등의 단축키를 처리해 텍스트 편집을 제어한다.
+        /// true를 반환하면 상위 PreviewKeyDown에서 e.Handled를 설정해야 한다.
+        /// </summary>
         public bool HandleKeyDown(KeyEventArgs e)
         {
             if (e == null)
@@ -158,6 +189,9 @@ namespace PDFEditor.Text
             return false;
         }
 
+        /// <summary>
+        /// TextBox가 속한 InkCanvas를 조회한다.
+        /// </summary>
         public bool TryGetOwnerCanvas(TextBox textBox, out InkCanvas canvas)
         {
             if (textBox != null && _textOwners.TryGetValue(textBox, out canvas))
@@ -168,6 +202,9 @@ namespace PDFEditor.Text
             return false;
         }
 
+        /// <summary>
+        /// 주석 파일에서 복원된 TextBox에 이벤트/스타일을 다시 설정한다.
+        /// </summary>
         public void RegisterExistingTextBox(InkCanvas canvas, TextBox textBox)
         {
             if (canvas == null || textBox == null)
@@ -184,6 +221,10 @@ namespace PDFEditor.Text
             UpdateAutoSize(textBox);
         }
 
+        /// <summary>
+        /// InkCanvas.Children에서 TextBox가 제거되었음을 알리는 콜백.
+        /// 내부 사전과 활성 상태를 함께 정리한다.
+        /// </summary>
         public void NotifyElementRemoved(UIElement element)
         {
             if (element is TextBox textBox && _textOwners.ContainsKey(textBox))
@@ -206,6 +247,9 @@ namespace PDFEditor.Text
             }
         }
 
+        /// <summary>
+        /// TextBox에 강제로 폰트 크기를 적용하고 자동 크기 조정을 다시 계산한다.
+        /// </summary>
         public void ApplyFontSize(TextBox textBox, double size)
         {
             if (textBox == null || size <= 0)
@@ -214,6 +258,9 @@ namespace PDFEditor.Text
             textBox.FontSize = size;
         }
 
+        /// <summary>
+        /// TextBox 폰트 색상을 설정한다. 입력 Brush가 Freezable이면 복제해서 보관한다.
+        /// </summary>
         public void ApplyForeground(TextBox textBox, Brush brush)
         {
             if (textBox == null || brush == null)
@@ -484,6 +531,9 @@ namespace PDFEditor.Text
             }
         }
 
+        /// <summary>
+        /// 폰트 크기 변경 등으로 텍스트 박스 크기가 달라졌을 때 AutoSize를 다시 계산한다.
+        /// </summary>
         public void RefreshLayout(TextBox textBox)
         {
             UpdateAutoSize(textBox);

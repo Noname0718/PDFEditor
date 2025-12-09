@@ -18,6 +18,9 @@ namespace PDFEditor.Shapes
         Triangle
     }
 
+    /// <summary>
+    /// InkCanvas 위에 사각형/원/선/삼각형을 그리고 동일 도구로 삭제하는 로직을 캡슐화한다.
+    /// </summary>
     public class ShapeToolManager
     {
         internal const string ShapeElementTag = "ShapeToolElement";
@@ -43,6 +46,9 @@ namespace PDFEditor.Shapes
         // 🔹 도형 지우개 모드 플래그
         private bool _eraseShapeMode = false;
 
+        /// <summary>
+        /// InkCanvas의 Preview 이벤트에 등록하고 페이지별 상태를 초기화한다.
+        /// </summary>
         public void AttachCanvas(InkCanvas canvas)
         {
             if (canvas == null || _states.ContainsKey(canvas))
@@ -55,17 +61,26 @@ namespace PDFEditor.Shapes
             canvas.PreviewMouseLeftButtonUp += Canvas_MouseLeftButtonUp;
         }
 
+        /// <summary>
+        /// 현재 생성할 도형 종류를 지정한다. None이면 드래그 이벤트가 무시된다.
+        /// </summary>
         public void SetShape(ShapeType type)
         {
             CurrentShape = type;
         }
 
         // 🔹 MainWindow에서 호출: "지우개가 도형도 지우게 할지" 설정
+        /// <summary>
+        /// 펜 지우개 버튼이 눌렸을 때 도형 삭제 기능을 연결하기 위한 토글.
+        /// </summary>
         public void SetShapeEraseMode(bool enabled)
         {
             _eraseShapeMode = enabled;
         }
 
+        /// <summary>
+        /// 도형 테두리 색상과 두께를 갱신한다. InkCanvas마다 동일한 값을 사용한다.
+        /// </summary>
         public void SetStroke(Brush brush, double thickness)
         {
             StrokeBrush = brush ?? Brushes.Black;
@@ -110,6 +125,9 @@ namespace PDFEditor.Shapes
             e.Handled = true;
         }
 
+        /// <summary>
+        /// 선택된 ShapeType에 맞는 Shape 인스턴스를 만들어 Tag를 설정한다.
+        /// </summary>
         private Shape CreateShape()
         {
             Shape shape;
@@ -195,6 +213,9 @@ namespace PDFEditor.Shapes
             e.Handled = true;
         }
 
+        /// <summary>
+        /// 드래그 중에 생성되는 PreviewShape의 위치와 크기를 bounding box 기준으로 계산한다.
+        /// </summary>
         private void UpdateShapeGeometry(ShapeDrawingState state, Point current)
         {
             Point start = state.StartPoint;
@@ -244,6 +265,9 @@ namespace PDFEditor.Shapes
         // ===============================
         //   🔻 여기부터 도형 지우기 로직
         // ===============================
+        /// <summary>
+        /// 지우개 모드에서 주어진 좌표에 히트한 Shape를 찾아 제거한다.
+        /// </summary>
         private void TryEraseShape(InkCanvas canvas, Point point)
         {
             if (canvas == null) return;
@@ -255,6 +279,9 @@ namespace PDFEditor.Shapes
             ShapeRemoved?.Invoke(canvas, shape);
         }
 
+        /// <summary>
+        /// InkCanvas.Children을 역순으로 탐색하며 가장 앞에 있는 Shape를 찾는다.
+        /// </summary>
         private Shape FindShapeAtPoint(InkCanvas canvas, Point canvasPoint)
         {
             for (int i = canvas.Children.Count - 1; i >= 0; i--)
@@ -269,6 +296,9 @@ namespace PDFEditor.Shapes
             return null;
         }
 
+        /// <summary>
+        /// Shape의 RenderedGeometry와 마우스 좌표를 비교해 내부/외곽선 히트를 판정한다.
+        /// </summary>
         private bool IsPointInsideShape(InkCanvas canvas, Shape shape, Point canvasPoint)
         {
             if (shape == null) return false;

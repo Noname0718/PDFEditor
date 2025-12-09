@@ -11,6 +11,9 @@ using PDFEditor.Text;
 
 namespace PDFEditor.Shapes
 {
+    /// <summary>
+    /// InkCanvas 위의 도형(Text 포함)과 Stroke를 박스 선택/드래그/리사이즈할 수 있게 해주는 도구 관리자.
+    /// </summary>
     public class SelectionToolManager
     {
         public event Action<InkCanvas, TextBox> TextElementDoubleClicked;
@@ -35,6 +38,9 @@ namespace PDFEditor.Shapes
         // 전체 선택 도구 on/off
         private bool _enabled = false;
 
+        /// <summary>
+        /// InkCanvas에 SelectionBox/AdornerLayer를 준비하고 마우스 이벤트를 바인딩한다.
+        /// </summary>
         public void AttachCanvas(InkCanvas canvas)
         {
             if (canvas == null || _states.ContainsKey(canvas))
@@ -64,6 +70,9 @@ namespace PDFEditor.Shapes
             canvas.PreviewMouseLeftButtonUp += Canvas_PreviewMouseLeftButtonUp;
         }
 
+        /// <summary>
+        /// 선택 도구 활성화 여부를 지정한다. 꺼질 때는 현재 선택과 드래그 상태를 초기화한다.
+        /// </summary>
         public void SetEnabled(bool enabled)
         {
             _enabled = enabled;
@@ -88,6 +97,9 @@ namespace PDFEditor.Shapes
         }
 
 
+        /// <summary>
+        /// 클릭 시 단일 선택/박스 선택/드래그 시작 여부를 결정한다.
+        /// </summary>
         private void Canvas_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             if (!_enabled) return;
@@ -144,6 +156,9 @@ namespace PDFEditor.Shapes
             }
         }
 
+        /// <summary>
+        /// 기존 선택을 모두 비우고 단일 요소만 선택 상태로 만든다.
+        /// </summary>
         private void SetSingleSelection(SelectionState state, UIElement element)
         {
             if (state == null)
@@ -157,6 +172,9 @@ namespace PDFEditor.Shapes
             UpdateGroupAdornerBounds(state);
         }
 
+        /// <summary>
+        /// 선택된 UIElement와 Stroke, SelectionBox, Adorner를 모두 초기화한다.
+        /// </summary>
         private void ClearSelectionInternal(SelectionState state)
         {
             state.IsDragging = false;
@@ -174,6 +192,9 @@ namespace PDFEditor.Shapes
         }
 
 
+        /// <summary>
+        /// 드래그 중일 때 요소를 이동하거나 박스 선택 사각형을 갱신한다.
+        /// </summary>
         private void Canvas_PreviewMouseMove(object sender, MouseEventArgs e)
         {
             if (!_enabled) return;
@@ -210,6 +231,9 @@ namespace PDFEditor.Shapes
             e.Handled = true;
         }
 
+        /// <summary>
+        /// 마우스를 떼면 드래그/박스 선택을 종료하고 캡처를 해제한다.
+        /// </summary>
         private void Canvas_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
             if (!_enabled) return;
@@ -231,6 +255,9 @@ namespace PDFEditor.Shapes
             e.Handled = true;
         }
 
+        /// <summary>
+        /// 클릭 지점에서 선택 가능한 UIElement를 역순으로 찾는다.
+        /// </summary>
         private UIElement FindSelectableElement(SelectionState state, Point position)
         {
             var canvas = state.Canvas;
@@ -252,6 +279,9 @@ namespace PDFEditor.Shapes
             return null;
         }
 
+        /// <summary>
+        /// 주어진 위치가 요소의 Bounds 안에 있는지 확인한다.
+        /// </summary>
         private bool IsPointOverElement(InkCanvas canvas, UIElement element, Point canvasPoint)
         {
             GeneralTransform transform = element.TransformToVisual(canvas);
@@ -262,6 +292,9 @@ namespace PDFEditor.Shapes
             return bounds.Contains(localPoint);
         }
 
+        /// <summary>
+        /// ShapeTool/TextTool이 생성한 요소인지 파악한다.
+        /// </summary>
         private bool IsSelectableElement(UIElement element)
         {
             if (element is Shape shape)
@@ -279,6 +312,9 @@ namespace PDFEditor.Shapes
             return false;
         }
 
+        /// <summary>
+        /// Canvas 좌표에서 UIElement를 delta 만큼 이동시킨다.
+        /// </summary>
         private void MoveElement(UIElement element, Vector delta)
         {
             // 기본: Canvas.Left/Top 사용 가능한 애들 (Rectangle, Ellipse, Image, TextBox 등)
@@ -310,6 +346,9 @@ namespace PDFEditor.Shapes
             }
         }
 
+        /// <summary>
+        /// 현재 선택된 모든 UIElement에 동일한 이동량을 적용한다.
+        /// </summary>
         private void MoveSelectedElements(SelectionState state, Vector delta)
         {
             if (state.SelectedElements == null)
@@ -321,6 +360,9 @@ namespace PDFEditor.Shapes
             }
         }
 
+        /// <summary>
+        /// 선택된 Stroke들을 Translate 메서드로 이동시킨다.
+        /// </summary>
         private void MoveSelectedStrokes(SelectionState state, Vector delta)
         {
             if (state.SelectedStrokes == null || state.SelectedStrokes.Count == 0)
@@ -335,6 +377,9 @@ namespace PDFEditor.Shapes
             }
         }
 
+        /// <summary>
+        /// 박스 선택 모드를 시작하고 SelectionBox를 화면에 보이게 한다.
+        /// </summary>
         private void StartBoxSelection(SelectionState state, Point start)
         {
             state.IsBoxSelecting = true;
@@ -351,6 +396,9 @@ namespace PDFEditor.Shapes
             state.Canvas?.CaptureMouse();
         }
 
+        /// <summary>
+        /// 마우스 이동에 맞게 SelectionBox의 크기를 조절한다.
+        /// </summary>
         private void UpdateSelectionBox(SelectionState state, Point current)
         {
             if (state.SelectionBox == null)
@@ -358,6 +406,9 @@ namespace PDFEditor.Shapes
             UpdateSelectionBoxVisual(state, state.BoxStart, current);
         }
 
+        /// <summary>
+        /// Rectangle 컨트롤에 bounding box 좌표를 적용한다.
+        /// </summary>
         private void UpdateSelectionBoxVisual(SelectionState state, Point start, Point current)
         {
             var rect = new Rect(start, current);
@@ -370,6 +421,9 @@ namespace PDFEditor.Shapes
             state.SelectionBox.Height = rect.Height;
         }
 
+        /// <summary>
+        /// 마우스를 떼면 사각형 내부 요소/스트로크를 모두 선택한다.
+        /// </summary>
         private void CompleteBoxSelection(SelectionState state, Point end)
         {
             state.IsBoxSelecting = false;
@@ -385,6 +439,9 @@ namespace PDFEditor.Shapes
             SelectElementsInRectangle(state, rect);
         }
 
+        /// <summary>
+        /// 주어진 사각형 안에 들어온 UIElement와 Stroke를 찾아 Selection 목록에 추가한다.
+        /// </summary>
         private void SelectElementsInRectangle(SelectionState state, Rect rect)
         {
             var canvas = state.Canvas;
@@ -419,6 +476,9 @@ namespace PDFEditor.Shapes
             UpdateGroupAdornerBounds(state);
         }
 
+        /// <summary>
+        /// InkCanvas 좌표계 기준으로 요소의 Bounds를 계산한다.
+        /// </summary>
         private Rect GetElementBounds(InkCanvas canvas, UIElement element)
         {
             GeneralTransform transform = element.TransformToVisual(canvas);
@@ -430,6 +490,9 @@ namespace PDFEditor.Shapes
             return bounds;
         }
 
+        /// <summary>
+        /// 현재 선택 그룹을 둘러싸는 Adorner가 없다면 생성한다.
+        /// </summary>
         private GroupSelectionAdorner EnsureGroupAdorner(SelectionState state)
         {
             if (state.GroupAdorner != null)
@@ -451,6 +514,9 @@ namespace PDFEditor.Shapes
             return adorner;
         }
 
+        /// <summary>
+        /// 그룹 Adorner에서 드래그된 새 Bounds를 토대로 요소/스트로크를 동시에 스케일링한다.
+        /// </summary>
         private void ResizeSelection(SelectionState state, Rect oldBounds, Rect newBounds)
         {
             double sx = oldBounds.Width <= 0 ? 1 : newBounds.Width / oldBounds.Width;
@@ -476,6 +542,9 @@ namespace PDFEditor.Shapes
             UpdateGroupAdornerBounds(state);
         }
 
+        /// <summary>
+        /// 개별 UIElement에 대해 스케일 변환을 적용한다. TextBox와 Shape를 구분하여 처리한다.
+        /// </summary>
         private void ResizeElement(SelectionState state, UIElement element, Rect oldBounds, Rect newBounds, double sx, double sy)
         {
             if (element is Line line)
@@ -552,6 +621,9 @@ namespace PDFEditor.Shapes
             }
         }
 
+        /// <summary>
+        /// 선택된 요소/스트로크의 전체 Bounds를 다시 계산해 Adorner에 전달한다.
+        /// </summary>
         private void UpdateGroupAdornerBounds(SelectionState state)
         {
             var bounds = GetSelectionBounds(state);
@@ -569,6 +641,9 @@ namespace PDFEditor.Shapes
             }
         }
 
+        /// <summary>
+        /// 현재 선택된 모든 요소와 스트로크를 둘러싸는 Rect를 계산한다.
+        /// </summary>
         private Rect? GetSelectionBounds(SelectionState state)
         {
             Rect? union = null;
@@ -591,6 +666,9 @@ namespace PDFEditor.Shapes
             return union;
         }
 
+        /// <summary>
+        /// 클릭 지점이 현재 Selection 그룹 내부인지 확인한다.
+        /// </summary>
         private bool IsPointInsideSelection(SelectionState state, Point point)
         {
             var bounds = GetSelectionBounds(state);
@@ -599,6 +677,9 @@ namespace PDFEditor.Shapes
             return bounds.Value.Contains(point);
         }
 
+        /// <summary>
+        /// 단일 선택된 요소를 반환한다. 여러 개면 null.
+        /// </summary>
         public UIElement GetSelectedElement(InkCanvas canvas)
         {
             if (canvas == null) return null;
@@ -611,6 +692,9 @@ namespace PDFEditor.Shapes
             return null;
         }
 
+        /// <summary>
+        /// 외부에서 특정 요소를 선택 상태로 만들고 UI를 반영한다.
+        /// </summary>
         public void SelectElement(InkCanvas canvas, UIElement element)
         {
             if (canvas == null) return;
@@ -621,6 +705,9 @@ namespace PDFEditor.Shapes
             }
         }
 
+        /// <summary>
+        /// 주어진 캔버스의 선택 상태를 초기화한다.
+        /// </summary>
         public void ClearSelection(InkCanvas canvas)
         {
             if (canvas == null) return;
@@ -631,6 +718,9 @@ namespace PDFEditor.Shapes
             }
         }
 
+        /// <summary>
+        /// 현재 선택된 UIElement 목록의 복사본을 반환한다 (Clipboard 기능 등에서 사용).
+        /// </summary>
         public IReadOnlyList<UIElement> GetSelectedElementsSnapshot(InkCanvas canvas)
         {
             if (canvas == null)
@@ -645,6 +735,9 @@ namespace PDFEditor.Shapes
             return Array.Empty<UIElement>();
         }
 
+        /// <summary>
+        /// 선택된 StrokeCollection의 복사본을 반환한다.
+        /// </summary>
         public IReadOnlyList<Stroke> GetSelectedStrokesSnapshot(InkCanvas canvas)
         {
             if (canvas == null)
@@ -659,6 +752,9 @@ namespace PDFEditor.Shapes
             return Array.Empty<Stroke>();
         }
 
+        /// <summary>
+        /// 외부에서 elements/strokes를 지정해 Selection 상태를 맞춰준다(붙여넣기 이후 등).
+        /// </summary>
         public void SelectItems(InkCanvas canvas, IEnumerable<UIElement> elements, IEnumerable<Stroke> strokes)
         {
             if (canvas == null)

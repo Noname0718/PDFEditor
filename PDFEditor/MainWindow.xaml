@@ -1,7 +1,12 @@
-﻿<Window x:Class="PDFEditor.MainWindow"
+<Window x:Class="PDFEditor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="PDF Editor" Height="800" Width="1200">
+        Title="PDF Editor"
+        Height="800"
+        Width="1200"
+        FontFamily="Segoe UI"
+        FontSize="12"
+        Background="{StaticResource AppBackgroundGradientBrush}">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -9,117 +14,147 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- 상단 컨트롤 -->
-        <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="5">
-            <!-- PDF 기본 컨트롤 -->
-            <Menu Margin="0,0,15,0">
-                <MenuItem Header="파일(_F)">
-                    <MenuItem Header="PDF 열기" Click="OpenPdf_Click"/>
-                    <MenuItem Header="작업 저장" Click="SaveAnnotation_Click"/>
-                    <MenuItem Header="작업 불러오기" Click="LoadAnnotation_Click"/>
-                    <Separator/>
-                    <MenuItem Header="주석 포함 PDF 내보내기" Click="ExportAnnotatedPdf_Click"/>
-                </MenuItem>
-            </Menu>
-            
-            <!-- ====== 여기부터 필기 도구 툴바 ====== -->
-            <Separator Margin="10,0,10,0" Width="1"/>
-            
-            <!-- 선택 도구 버튼-->
-            <ToggleButton x:Name="SelectButton"
-              Content="⬚ 선택"
-              Width="70" Margin="0,0,5,0"
-              Click="ToolButton_Click"
-              Tag="Select"/>
-            
-            <!-- 도구 버튼 3종 -->
-            <ToggleButton x:Name="PenButton"
-                          Content="✏ 펜"
-                          Width="70" Margin="0,0,5,0"
-                          IsChecked="True"
-                          Click="ToolButton_Click"
-                          Tag="Pen"/>
+        <!-- 상단 툴바 -->
+        <Border Grid.Row="0"
+                Background="{StaticResource CardBackgroundBrush}"
+                BorderBrush="{StaticResource BorderBrushLight}"
+                BorderThickness="0,0,0,1"
+                Padding="20,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
 
-            <ToggleButton x:Name="HighlighterButton"
-                          Content="🖍 형광펜"
-                          Width="90" Margin="0,0,5,0"
-                          Click="ToolButton_Click"
-                          Tag="Highlighter"/>
+                <!-- 파일 그룹 -->
+                <StackPanel Grid.Column="0"
+                            Margin="0,0,20,0">
+                    <TextBlock Text="파일"
+                               Style="{StaticResource SectionLabelTextStyle}"/>
+                    <Menu Background="Transparent"
+                          BorderThickness="0"
+                          VerticalAlignment="Center">
+                        <MenuItem Header="📁 파일"
+                                  FontWeight="SemiBold">
+                            <MenuItem Header="📂 열기 (Ctrl+O)"
+                                      Click="OpenPdf_Click"/>
+                            <MenuItem Header="💾 저장 (Ctrl+S)"
+                                      Click="SaveAnnotation_Click"/>
+                            <MenuItem Header="📁 작업 불러오기"
+                                      Click="LoadAnnotation_Click"/>
+                            <Separator/>
+                            <MenuItem Header="📤 PDF 내보내기"
+                                      Click="ExportAnnotatedPdf_Click"/>
+                        </MenuItem>
+                    </Menu>
+                </StackPanel>
 
-            <ToggleButton x:Name="EraserButton"
-                          Content="🧹 지우개"
-                          Width="80" Margin="0,0,5,0"
-                          Click="ToolButton_Click"
-                          Tag="Eraser"/>
-            <Button Content="전체 지우기"
-                    Margin="10,0,0,0"
-                    Click="ClearAllAnnotations_Click"/>
+                <!-- 도구 그룹 -->
+                <StackPanel Grid.Column="1"
+                            HorizontalAlignment="Center"
+                            Margin="0,0,20,0">
+                    <TextBlock Text="그리기 도구"
+                               Style="{StaticResource SectionLabelTextStyle}"
+                               HorizontalAlignment="Center"/>
+                    <WrapPanel HorizontalAlignment="Center"
+                               VerticalAlignment="Center">
+                        <ToggleButton x:Name="SelectButton"
+                                      Content="🖱 선택"
+                                      Style="{StaticResource ToolToggleButtonStyle}"
+                                      Click="ToolButton_Click"
+                                      Tag="Select"/>
+                        <ToggleButton x:Name="PenButton"
+                                      Content="✏ 펜"
+                                      Style="{StaticResource ToolToggleButtonStyle}"
+                                      IsChecked="True"
+                                      Click="ToolButton_Click"
+                                      Tag="Pen"/>
+                        <ToggleButton x:Name="HighlighterButton"
+                                      Content="🖍 형광펜"
+                                      Style="{StaticResource ToolToggleButtonStyle}"
+                                      Click="ToolButton_Click"
+                                      Tag="Highlighter"/>
+                        <ToggleButton x:Name="EraserButton"
+                                      Content="🧽 지우개"
+                                      Style="{StaticResource ToolToggleButtonStyle}"
+                                      Click="ToolButton_Click"
+                                      Tag="Eraser"/>
+                        <ToggleButton x:Name="LineButton"
+                                      Content="↔ 직선"
+                                      Style="{StaticResource ToolToggleButtonStyle}"
+                                      Click="ToolButton_Click"
+                                      Tag="Line"/>
+                        <ToggleButton x:Name="RectButton"
+                                      Content="⬛ 사각형"
+                                      Style="{StaticResource ToolToggleButtonStyle}"
+                                      Click="ToolButton_Click"
+                                      Tag="Rectangle"/>
+                        <ToggleButton x:Name="EllipseButton"
+                                      Content="⚪ 원"
+                                      Style="{StaticResource ToolToggleButtonStyle}"
+                                      Click="ToolButton_Click"
+                                      Tag="Ellipse"/>
+                        <ToggleButton x:Name="TriangleButton"
+                                      Content="🔺 삼각형"
+                                      Style="{StaticResource ToolToggleButtonStyle}"
+                                      Click="ToolButton_Click"
+                                      Tag="Triangle"/>
+                        <ToggleButton x:Name="TextButton"
+                                      Content="🔤 텍스트"
+                                      Style="{StaticResource ToolToggleButtonStyle}"
+                                      Click="ToolButton_Click"
+                                      Tag="Text"/>
+                        <Button Content="🧹 전체 지우기"
+                                Style="{StaticResource FlatButtonStyle}"
+                                Margin="12,0,0,0"
+                                Click="ClearAllAnnotations_Click"/>
+                    </WrapPanel>
+                </StackPanel>
 
-            <!-- 도형 버튼 4종 -->
-            <ToggleButton x:Name="RectButton"
-              Content="▭ 사각형"
-              Width="80" Margin="5,0,0,0"
-              Click="ToolButton_Click"
-              Tag="Rectangle"/>
-
-            <ToggleButton x:Name="EllipseButton"
-              Content="◯ 원"
-              Width="70" Margin="5,0,0,0"
-              Click="ToolButton_Click"
-              Tag="Ellipse"/>
-
-            <ToggleButton x:Name="LineButton"
-              Content="／ 직선"
-              Width="70" Margin="5,0,0,0"
-              Click="ToolButton_Click"
-              Tag="Line"/>
-
-            <ToggleButton x:Name="TriangleButton"
-              Content="△ 삼각형"
-              Width="80" Margin="5,0,0,0"
-              Click="ToolButton_Click"
-              Tag="Triangle"/>
-            
-            <ToggleButton x:Name="TextButton"
-              Content="🅣 텍스트"
-              Width="85" Margin="5,0,0,0"
-              Click="ToolButton_Click"
-              Tag="Text"/>
-
-            <!-- 색 선택 -->
-            <TextBlock Text="색:" VerticalAlignment="Center" Margin="10,0,3,0"/>
-            <ComboBox x:Name="ColorComboBox"
-                      Width="90"
-                      SelectionChanged="ColorComboBox_SelectionChanged">
-                <ComboBoxItem Content="검정" Tag="Black" IsSelected="True"/>
-                <ComboBoxItem Content="빨강" Tag="Red"/>
-                <ComboBoxItem Content="파랑" Tag="Blue"/>
-                <ComboBoxItem Content="초록" Tag="Green"/>
-                <ComboBoxItem Content="노랑" Tag="Yellow"/>
-                <ComboBoxItem Content="주황" Tag="Orange"/>
-                <ComboBoxItem Content="보라" Tag="Purple"/>
-            </ComboBox>
-
-            <!-- 두께 슬라이더 -->
-            <TextBlock Text="두께:" VerticalAlignment="Center" Margin="10,0,3,0"/>
-
-            <Slider x:Name="ThicknessSlider"
-                Minimum="1"
-                Maximum="15"
-                Value="3"
-                Width="100"
-                TickFrequency="1"
-                IsSnapToTickEnabled="True"
-                VerticalAlignment="Center"
-                ValueChanged="ThicknessSlider_ValueChanged"/>
-
-            <TextBlock x:Name="ThicknessValueText"
-                VerticalAlignment="Center"
-                Margin="5,0,0,0"
-                Text="3px"/>
-
-            <!-- ====== 필기 도구 끝 ====== -->
-        </StackPanel>
+                <!-- 옵션 그룹 -->
+                <StackPanel Grid.Column="2"
+                            HorizontalAlignment="Right">
+                    <TextBlock Text="옵션"
+                               Style="{StaticResource SectionLabelTextStyle}"
+                               HorizontalAlignment="Right"/>
+                    <StackPanel Orientation="Horizontal"
+                                VerticalAlignment="Center">
+                        <TextBlock Text="색상"
+                                   Style="{StaticResource ToolbarLabelTextStyle}"/>
+                        <ComboBox x:Name="ColorComboBox"
+                                  Width="120"
+                                  Margin="0,0,12,0"
+                                  VerticalAlignment="Center"
+                                  SelectionChanged="ColorComboBox_SelectionChanged">
+                            <ComboBoxItem Content="검정" Tag="Black" IsSelected="True"/>
+                            <ComboBoxItem Content="빨강" Tag="Red"/>
+                            <ComboBoxItem Content="파랑" Tag="Blue"/>
+                            <ComboBoxItem Content="초록" Tag="Green"/>
+                            <ComboBoxItem Content="노랑" Tag="Yellow"/>
+                            <ComboBoxItem Content="주황" Tag="Orange"/>
+                            <ComboBoxItem Content="보라" Tag="Purple"/>
+                        </ComboBox>
+                        <TextBlock Text="두께"
+                                   Style="{StaticResource ToolbarLabelTextStyle}"
+                                   Margin="0,0,6,0"/>
+                        <Slider x:Name="ThicknessSlider"
+                                Minimum="0.2"
+                                Maximum="15"
+                                Value="2"
+                                Width="140"
+                                TickFrequency="0.2"
+                                IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center"
+                                ValueChanged="ThicknessSlider_ValueChanged"/>
+                        <TextBlock x:Name="ThicknessValueText"
+                                   Text="2px"
+                                   Style="{StaticResource StatusValueTextStyle}"
+                                   Margin="8,0,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </Border>
 
         <Popup x:Name="TextMiniToolbar"
                StaysOpen="True"
@@ -127,17 +162,18 @@
                Placement="Bottom"
                PopupAnimation="Slide"
                IsOpen="False">
-            <Border Background="#F8F8F8"
-                    BorderBrush="#FFD0D0D0"
+            <Border Background="{StaticResource CardBackgroundBrush}"
+                    BorderBrush="{StaticResource BorderBrushLight}"
                     BorderThickness="1"
                     CornerRadius="6"
-                    Padding="6"
-                    SnapsToDevicePixels="True">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    Padding="8"
+                    Effect="{StaticResource CardShadowEffect}">
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Center">
                     <Button x:Name="TextColorToolbarButton"
                             Content="🎨 글자색"
-                            Margin="0,0,6,0"
-                            Padding="8,4"
+                            Margin="0,0,8,0"
+                            Padding="10,4"
                             Click="TextColorToolbarButton_Click">
                         <Button.ContextMenu>
                             <ContextMenu Placement="Bottom">
@@ -153,99 +189,101 @@
                     </Button>
                     <Button x:Name="TextFontIncreaseButton"
                             Content="A＋"
-                            Margin="0,0,6,0"
-                            Padding="8,4"
+                            Margin="0,0,8,0"
+                            Padding="10,4"
                             Width="60"
                             Click="TextFontIncreaseButton_Click"/>
                     <Button x:Name="TextFontDecreaseButton"
                             Content="A－"
-                            Padding="8,4"
+                            Padding="10,4"
                             Width="60"
                             Click="TextFontDecreaseButton_Click"/>
                 </StackPanel>
             </Border>
         </Popup>
 
-        <!-- PDF + 필기 (스크롤) -->
+        <!-- PDF 페이지 영역 -->
         <ScrollViewer x:Name="PdfScrollViewer"
                       Grid.Row="1"
-                      Background="#FFE5E5E5"
+                      Background="Transparent"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Auto">
-            <StackPanel x:Name="PagesPanel">
-                <StackPanel.LayoutTransform>
-                    <!-- 🔍 여기서 바로 줌 적용 -->
-                    <ScaleTransform x:Name="ZoomTransform"
-                                    ScaleX="1"
-                                    ScaleY="1" />
-                </StackPanel.LayoutTransform>
-            </StackPanel>
+            <Grid HorizontalAlignment="Center">
+                <StackPanel x:Name="PagesPanel"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Top"
+                            Margin="0,5,0,10">
+                    <StackPanel.LayoutTransform>
+                        <ScaleTransform x:Name="ZoomTransform"
+                                        ScaleX="1"
+                                        ScaleY="1"/>
+                    </StackPanel.LayoutTransform>
+                </StackPanel>
+            </Grid>
         </ScrollViewer>
 
-        <Grid Grid.Row= "2" Margin="7">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/> <!-- 왼쪽: 페이지 -->
-                <ColumnDefinition Width="*"/> <!-- 가운데: 여백 -->
-                <ColumnDefinition Width="Auto"/> <!-- 오른쪽: 줌 -->
-            </Grid.ColumnDefinitions>
+        <!-- 하단 상태바 -->
+        <Border Grid.Row="2"
+                Background="{StaticResource CardBackgroundBrush}"
+                BorderBrush="{StaticResource BorderBrushLight}"
+                BorderThickness="0,1,0,0"
+                Padding="20,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
 
-            <!-- 🔹 왼쪽 아래: 이전/다음/페이지 입력/이동/페이지 정보 -->
-            <StackPanel Orientation="Horizontal"
-                Grid.Column="0"
-                VerticalAlignment="Center">
-                <Button Content="이전 페이지"
-                Click="PrevPage_Click"
-                Margin="0,0,5,0"/>
+                <StackPanel Grid.Column="0"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Content="◀ 이전"
+                            Style="{StaticResource FlatButtonStyle}"
+                            Click="PrevPage_Click"/>
+                    <Button Content="다음 ▶"
+                            Style="{StaticResource FlatButtonStyle}"
+                            Margin="0,0,12,0"
+                            Click="NextPage_Click"/>
+                    <TextBlock Text="페이지"
+                               Style="{StaticResource StatusLabelTextStyle}"/>
+                    <TextBox x:Name="PageInput"
+                             Width="64"
+                             Margin="0,0,8,0"
+                             VerticalAlignment="Center"/>
+                    <Button Content="↪ 이동"
+                            Style="{StaticResource FlatButtonStyle}"
+                            Margin="0,0,12,0"
+                            Click="GoToPage_Click"/>
+                    <TextBlock x:Name="PageInfoText"
+                               Style="{StaticResource StatusValueTextStyle}"/>
+                </StackPanel>
 
-                <Button Content="다음 페이지"
-                Click="NextPage_Click"
-                Margin="0,0,5,0"/>
-
-                <TextBlock Text="페이지:"
-                   VerticalAlignment="Center"
-                   Margin="10,0,3,0"/>
-
-                <TextBox x:Name="PageInput"
-                 Width="50"
-                 VerticalAlignment="Center"
-                 Margin="0,0,3,0"/>
-
-                <Button Content="이동"
-                Click="GoToPage_Click"
-                Margin="0,0,10,0"/>
-
-                <TextBlock x:Name="PageInfoText"
-                   VerticalAlignment="Center"/>
-            </StackPanel>
-
-            <!-- 🔹 오른쪽 아래: 줌 슬라이더 + 입력 -->
-            <StackPanel Orientation="Horizontal"
-                Grid.Column="2"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Center">
-                <TextBlock Text="줌:"
-                   VerticalAlignment="Center"
-                   Margin="0,0,3,0"/>
-
-                <Slider x:Name="ZoomSlider"
-                Minimum="50"
-                Maximum="300"
-                Value="100"
-                Width="120"
-                ValueChanged="ZoomSlider_ValueChanged"
-                VerticalAlignment="Center"/>
-
-                <TextBox x:Name="ZoomTextBox"
-                 Width="40"
-                 Margin="5,0,0,0"
-                 VerticalAlignment="Center"
-                 Text="100"
-                 KeyDown="ZoomTextBox_KeyDown"/>
-
-                <TextBlock Text="%"
-                   VerticalAlignment="Center"
-                   Margin="2,0,0,0"/>
-            </StackPanel>
-        </Grid>
+                <StackPanel Grid.Column="2"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="줌"
+                               Style="{StaticResource StatusLabelTextStyle}"/>
+                    <Slider x:Name="ZoomSlider"
+                            Minimum="50"
+                            Maximum="300"
+                            Value="100"
+                            Width="160"
+                            Margin="0,0,12,0"
+                            VerticalAlignment="Center"
+                            ValueChanged="ZoomSlider_ValueChanged"/>
+                    <TextBox x:Name="ZoomTextBox"
+                             Width="56"
+                             Margin="0,0,6,0"
+                             VerticalAlignment="Center"
+                             HorizontalContentAlignment="Center"
+                             Text="100"
+                             KeyDown="ZoomTextBox_KeyDown"/>
+                    <TextBlock Text="%"
+                               Style="{StaticResource StatusValueTextStyle}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
     </Grid>
 </Window>

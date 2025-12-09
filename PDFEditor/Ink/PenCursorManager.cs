@@ -32,6 +32,9 @@ namespace PDFEditor.Ink
         private CursorMode _mode = CursorMode.Pen;
         private Cursor _fallbackCursor = Cursors.Arrow;
 
+        /// <summary>
+        /// InkCanvas가 생성될 때까지 기다렸다가 PenCursorAdorner를 붙이고 마우스/스타일러스 이벤트를 감시한다.
+        /// </summary>
         public void AttachCanvas(InkCanvas canvas)
         {
             if (canvas == null || _entries.ContainsKey(canvas))
@@ -54,6 +57,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 커서 표시 기능을 켜거나 끈다. 끄면 모든 Adorner를 숨기고 기본 커서를 되돌린다.
+        /// </summary>
         public void SetEnabled(bool enabled)
         {
             _enabled = enabled;
@@ -68,6 +74,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 펜 두께가 바뀌었을 때 커서 미리보기의 직경을 즉시 갱신한다.
+        /// </summary>
         public void SetThickness(double thickness)
         {
             _thickness = thickness;
@@ -77,6 +86,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 모든 InkCanvas에서 이벤트 핸들러와 Adorner를 제거한다.
+        /// </summary>
         public void Clear()
         {
             foreach (Entry entry in _entries.Values)
@@ -97,6 +109,10 @@ namespace PDFEditor.Ink
             _entries.Clear();
         }
 
+        /// <summary>
+        /// 커서 모드를 펜/지우개/숨김 중 하나로 전환한다.
+        /// fallbackCursor는 숨김 모드일 때 사용할 시스템 커서다.
+        /// </summary>
         public void SetMode(CursorMode mode, Cursor fallbackCursor = null)
         {
             _mode = mode;
@@ -108,6 +124,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 마우스가 InkCanvas 위에 들어올 때 커서 위치를 업데이트한다.
+        /// </summary>
         private void Canvas_MouseEnter(object sender, MouseEventArgs e)
         {
             if (!_enabled || _mode == CursorMode.Hidden) return;
@@ -119,6 +138,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 이동 중에도 커서 위치를 계속 맞춰준다.
+        /// </summary>
         private void Canvas_MouseMove(object sender, MouseEventArgs e)
         {
             if (!_enabled || _mode == CursorMode.Hidden) return;
@@ -130,6 +152,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 마우스가 InkCanvas 밖으로 나가면 미리보기 원을 숨긴다.
+        /// </summary>
         private void Canvas_MouseLeave(object sender, MouseEventArgs e)
         {
             InkCanvas canvas = sender as InkCanvas;
@@ -140,6 +165,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 스타일러스 입력도 동일하게 처리한다.
+        /// </summary>
         private void Canvas_StylusEnter(object sender, StylusEventArgs e)
         {
             if (!_enabled || _mode == CursorMode.Hidden) return;
@@ -151,6 +179,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 스타일러스 이동 이벤트 처리기.
+        /// </summary>
         private void Canvas_StylusMove(object sender, StylusEventArgs e)
         {
             if (!_enabled || _mode == CursorMode.Hidden) return;
@@ -162,6 +193,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 스타일러스가 나갈 때도 Adorner를 숨긴다.
+        /// </summary>
         private void Canvas_StylusLeave(object sender, StylusEventArgs e)
         {
             InkCanvas canvas = sender as InkCanvas;
@@ -172,6 +206,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// 현재 모드/활성화 상태에 따라 InkCanvas.Cursor와 Adorner 시각을 조정한다.
+        /// </summary>
         private void UpdateCursorState(Entry entry)
         {
             var canvas = entry.Canvas;
@@ -191,6 +228,9 @@ namespace PDFEditor.Ink
             }
         }
 
+        /// <summary>
+        /// InkCanvas마다 AdornerLayer를 찾아 PenCursorAdorner를 추가하고 이벤트를 연결한다.
+        /// </summary>
         private void InitializeCanvasEntry(InkCanvas canvas)
         {
             if (canvas == null)

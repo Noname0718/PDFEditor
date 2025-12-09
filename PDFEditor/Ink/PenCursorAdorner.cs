@@ -6,6 +6,9 @@ using System.Windows.Media;
 
 namespace PDFEditor.Ink
 {
+    /// <summary>
+    /// InkCanvas 위에 반투명한 펜/지우개 커서를 직접 그려주는 Adorner.
+    /// </summary>
     internal sealed class PenCursorAdorner : Adorner
     {
         internal enum CursorVisual
@@ -24,6 +27,9 @@ namespace PDFEditor.Ink
             IsHitTestVisible = false;
         }
 
+        /// <summary>
+        /// 커서가 위치할 좌표를 업데이트하고 즉시 다시 그린다.
+        /// </summary>
         public void UpdatePosition(Point position)
         {
             _position = position;
@@ -31,18 +37,27 @@ namespace PDFEditor.Ink
             InvalidateVisual();
         }
 
+        /// <summary>
+        /// 외부에서 커서 숨김을 요청했을 때 호출된다.
+        /// </summary>
         public void Hide()
         {
             _visible = false;
             InvalidateVisual();
         }
 
+        /// <summary>
+        /// 펜 굵기에 맞게 시각적인 원/사각형 크기를 조절한다.
+        /// </summary>
         public void UpdateThickness(double thickness)
         {
             _diameter = Math.Max(2, thickness);
             InvalidateVisual();
         }
 
+        /// <summary>
+        /// 펜/지우개 모드에 따라 그릴 모양을 선택한다.
+        /// </summary>
         public void SetVisual(CursorVisual visual)
         {
             _visual = visual;

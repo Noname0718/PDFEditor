@@ -85,7 +85,6 @@
     </Compile>
     <Compile Include="Ink\PenCursorAdorner.cs" />
     <Compile Include="Ink\PenCursorManager.cs" />
-    <Compile Include="Ink\InkCanvasFactory.cs" />
     <Compile Include="Ink\AreaEraserManager.cs" />
     <Compile Include="Ink\InkToolManager.cs" />
     <Compile Include="Ink\StrokeSerializer.cs" />
