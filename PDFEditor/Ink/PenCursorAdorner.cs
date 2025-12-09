@@ -8,9 +8,16 @@ namespace PDFEditor.Ink
 {
     internal sealed class PenCursorAdorner : Adorner
     {
+        internal enum CursorVisual
+        {
+            Pen,
+            Eraser
+        }
+
         private bool _visible = false;
         private Point _position;
         private double _diameter = 3;
+        private CursorVisual _visual = CursorVisual.Pen;
 
         public PenCursorAdorner(UIElement adornedElement) : base(adornedElement)
         {
@@ -32,7 +39,13 @@ namespace PDFEditor.Ink
 
         public void UpdateThickness(double thickness)
         {
-            _diameter = Math.Max(3, thickness);
+            _diameter = Math.Max(2, thickness);
+            InvalidateVisual();
+        }
+
+        public void SetVisual(CursorVisual visual)
+        {
+            _visual = visual;
             InvalidateVisual();
         }
 
@@ -42,8 +55,24 @@ namespace PDFEditor.Ink
             if (!_visible) return;
 
             double radius = _diameter / 2;
-            var fill = new SolidColorBrush(Color.FromArgb(120, 255, 255, 120));
-            drawingContext.DrawEllipse(fill, null, _position, radius, radius);
+            switch (_visual)
+            {
+                case CursorVisual.Pen:
+                    drawingContext.DrawEllipse(
+                        new SolidColorBrush(Color.FromArgb(140, 240, 240, 100)),
+                        new Pen(Brushes.DarkOliveGreen, 1),
+                        _position,
+                        radius,
+                        radius);
+                    break;
+                case CursorVisual.Eraser:
+                    var rect = new Rect(_position.X - radius, _position.Y - radius, _diameter, _diameter);
+                    drawingContext.DrawRectangle(
+                        new SolidColorBrush(Color.FromArgb(200, 255, 255, 255)),
+                        new Pen(Brushes.Gray, 1),
+                        rect);
+                    break;
+            }
         }
     }
 }

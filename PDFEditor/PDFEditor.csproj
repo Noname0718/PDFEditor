@@ -74,6 +74,7 @@
     <Compile Include="Shapes\GroupSelectionAdorner.cs" />
     <Compile Include="Shapes\SelectionToolManager.cs" />
     <Compile Include="Shapes\ShapetoolManager.cs" />
+    <Compile Include="Text\TextToolManager.cs" />
     <Page Include="MainWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
@@ -85,6 +86,7 @@
     <Compile Include="Ink\PenCursorAdorner.cs" />
     <Compile Include="Ink\PenCursorManager.cs" />
     <Compile Include="Ink\InkCanvasFactory.cs" />
+    <Compile Include="Ink\AreaEraserManager.cs" />
     <Compile Include="Ink\InkToolManager.cs" />
     <Compile Include="Ink\StrokeSerializer.cs" />
     <Compile Include="MainWindow.xaml.cs">

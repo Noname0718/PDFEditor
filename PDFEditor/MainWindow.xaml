@@ -12,7 +12,15 @@
         <!-- 상단 컨트롤 -->
         <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="5">
             <!-- PDF 기본 컨트롤 -->
-            <Button Content="PDF 열기" Click="OpenPdf_Click" Margin="0,0,5,0"/>
+            <Menu Margin="0,0,15,0">
+                <MenuItem Header="파일(_F)">
+                    <MenuItem Header="PDF 열기" Click="OpenPdf_Click"/>
+                    <MenuItem Header="작업 저장" Click="SaveAnnotation_Click"/>
+                    <MenuItem Header="작업 불러오기" Click="LoadAnnotation_Click"/>
+                    <Separator/>
+                    <MenuItem Header="주석 포함 PDF 내보내기" Click="ExportAnnotatedPdf_Click"/>
+                </MenuItem>
+            </Menu>
             
             <!-- ====== 여기부터 필기 도구 툴바 ====== -->
             <Separator Margin="10,0,10,0" Width="1"/>
@@ -43,6 +51,9 @@
                           Width="80" Margin="0,0,5,0"
                           Click="ToolButton_Click"
                           Tag="Eraser"/>
+            <Button Content="전체 지우기"
+                    Margin="10,0,0,0"
+                    Click="ClearAllAnnotations_Click"/>
 
             <!-- 도형 버튼 4종 -->
             <ToggleButton x:Name="RectButton"
@@ -68,6 +79,12 @@
               Width="80" Margin="5,0,0,0"
               Click="ToolButton_Click"
               Tag="Triangle"/>
+            
+            <ToggleButton x:Name="TextButton"
+              Content="🅣 텍스트"
+              Width="85" Margin="5,0,0,0"
+              Click="ToolButton_Click"
+              Tag="Text"/>
 
             <!-- 색 선택 -->
             <TextBlock Text="색:" VerticalAlignment="Center" Margin="10,0,3,0"/>
@@ -103,6 +120,51 @@
 
             <!-- ====== 필기 도구 끝 ====== -->
         </StackPanel>
+
+        <Popup x:Name="TextMiniToolbar"
+               StaysOpen="True"
+               AllowsTransparency="True"
+               Placement="Bottom"
+               PopupAnimation="Slide"
+               IsOpen="False">
+            <Border Background="#F8F8F8"
+                    BorderBrush="#FFD0D0D0"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="6"
+                    SnapsToDevicePixels="True">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <Button x:Name="TextColorToolbarButton"
+                            Content="🎨 글자색"
+                            Margin="0,0,6,0"
+                            Padding="8,4"
+                            Click="TextColorToolbarButton_Click">
+                        <Button.ContextMenu>
+                            <ContextMenu Placement="Bottom">
+                                <MenuItem Header="검정" Tag="Black" Click="TextColorMenuItem_Click"/>
+                                <MenuItem Header="빨강" Tag="Red" Click="TextColorMenuItem_Click"/>
+                                <MenuItem Header="파랑" Tag="Blue" Click="TextColorMenuItem_Click"/>
+                                <MenuItem Header="초록" Tag="Green" Click="TextColorMenuItem_Click"/>
+                                <MenuItem Header="노랑" Tag="Goldenrod" Click="TextColorMenuItem_Click"/>
+                                <MenuItem Header="보라" Tag="Purple" Click="TextColorMenuItem_Click"/>
+                                <MenuItem Header="하양" Tag="White" Click="TextColorMenuItem_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                    <Button x:Name="TextFontIncreaseButton"
+                            Content="A＋"
+                            Margin="0,0,6,0"
+                            Padding="8,4"
+                            Width="60"
+                            Click="TextFontIncreaseButton_Click"/>
+                    <Button x:Name="TextFontDecreaseButton"
+                            Content="A－"
+                            Padding="8,4"
+                            Width="60"
+                            Click="TextFontDecreaseButton_Click"/>
+                </StackPanel>
+            </Border>
+        </Popup>
 
         <!-- PDF + 필기 (스크롤) -->
         <ScrollViewer x:Name="PdfScrollViewer"

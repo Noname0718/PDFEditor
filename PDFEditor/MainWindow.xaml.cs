@@ -1,12 +1,16 @@
 ﻿using Microsoft.Win32;
 using PDFEditor.Ink;
 using PDFEditor.Shapes;
+using PDFEditor.Text;
 using PdfiumViewer;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Text;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -16,6 +20,8 @@ using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace PDFEditor
 {
@@ -30,8 +36,19 @@ namespace PDFEditor
         private Dictionary<int, InkCanvas> _pageInkCanvases = new Dictionary<int, InkCanvas>(); // 페이지별 InkCanvas
         private ShapeToolManager _shapeTool = new ShapeToolManager(); // 도형 그리기/지우기 제어
         private SelectionToolManager _selectionTool = new SelectionToolManager();
+        private TextToolManager _textTool = new TextToolManager();
         private PenCursorManager _penCursorManager = new PenCursorManager();
+        private AreaEraserManager _areaEraserManager = new AreaEraserManager();
         private Dictionary<InkCanvas, int> _inkCanvasPageIndex = new Dictionary<InkCanvas, int>();
+        private List<System.Drawing.SizeF> _pageSizesPoints = new List<System.Drawing.SizeF>();
+        private string _currentPdfPath;
+        private string _currentAnnotationPath;
+        private double _textDefaultFontSize = 18;
+        private Color _textDefaultFontColor = Colors.Black;
+        private const double MinTextFontSize = 8;
+        private const double MaxTextFontSize = 96;
+        private const double TextFontStep = 2;
+        private static readonly Guid StrokeIdProperty = new Guid("F1F5A601-6CF2-4A0F-9BD2-1A96D4BB3F25");
         private Stack<IUndoRedoAction> _undoStack = new Stack<IUndoRedoAction>();
         private Stack<IUndoRedoAction> _redoStack = new Stack<IUndoRedoAction>();
         private bool _recordHistory = true;
@@ -52,8 +69,17 @@ namespace PDFEditor
             PdfScrollViewer.PreviewMouseWheel += PdfScrollViewer_PreviewMouseWheel;
             _shapeTool.ShapeCreated += ShapeTool_ShapeCreated;
             _shapeTool.ShapeRemoved += ShapeTool_ShapeRemoved;
+            _selectionTool.TextElementDoubleClicked += SelectionTool_TextElementDoubleClicked;
             _penCursorManager.SetThickness(ThicknessSlider?.Value ?? 3.0);
             _penCursorManager.SetEnabled(true);
+            _textTool.TextBoxCreated += TextTool_TextBoxCreated;
+            _textTool.TextCommitted += TextTool_TextCommitted;
+            _textTool.TextBoxRemoved += TextTool_TextBoxRemoved;
+            _textTool.ActiveTextBoxChanged += TextTool_ActiveTextBoxChanged;
+            _textTool.EditingStateChanged += TextTool_EditingStateChanged;
+            _areaEraserManager.ElementErased += AreaEraser_ElementErased;
+            _areaEraserManager.SetRadius(ThicknessSlider?.Value ?? 3.0);
+            InitializeTextToolDefaults();
         }
 
         /// <summary>
@@ -69,6 +95,11 @@ namespace PDFEditor
         /// </summary>
         private void OpenPdf_Click(object sender, RoutedEventArgs e)
         {
+            ShowOpenPdfDialog();
+        }
+
+        private void ShowOpenPdfDialog()
+        {
             var dlg = new OpenFileDialog
             {
                 Filter = "PDF Files|*.pdf"
@@ -76,8 +107,59 @@ namespace PDFEditor
 
             if (dlg.ShowDialog() == true)
             {
+                LoadPdfFromPath(dlg.FileName);
+            }
+        }
+
+        private void SaveAnnotation_Click(object sender, RoutedEventArgs e)
+        {
+            if (_pdf == null)
+            {
+                MessageBox.Show("먼저 PDF를 열어주세요.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dlg = new SaveFileDialog
+            {
+                Filter = "PDF 주석 파일|*.pdfanno",
+                FileName = !string.IsNullOrWhiteSpace(_currentAnnotationPath)
+                    ? System.IO.Path.GetFileName(_currentAnnotationPath)
+                    : System.IO.Path.ChangeExtension(System.IO.Path.GetFileName(_currentPdfPath) ?? "annotations", ".pdfanno")
+            };
+
+            if (dlg.ShowDialog() == true)
+            {
+                SaveAnnotationsToFile(dlg.FileName);
+            }
+        }
+
+        private void LoadAnnotation_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new OpenFileDialog
+            {
+                Filter = "PDF 주석 파일|*.pdfanno"
+            };
+
+            if (dlg.ShowDialog() == true)
+            {
+                LoadAnnotationsFromFile(dlg.FileName);
+            }
+        }
+
+        private void LoadPdfFromPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                MessageBox.Show("PDF 파일을 찾을 수 없습니다.", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            try
+            {
                 _pdf?.Dispose();
-                _pdf = PdfDocument.Load(dlg.FileName);
+                _pdf = PdfDocument.Load(path);
+                _currentPdfPath = path;
+                _currentAnnotationPath = null;
                 _currentPage = 0;
 
                 RenderAllPages();
@@ -87,7 +169,486 @@ namespace PDFEditor
                 {
                     FitWidthToViewer();
                 }), System.Windows.Threading.DispatcherPriority.Loaded);
+
+                string defaultAnnotation = System.IO.Path.ChangeExtension(path, ".pdfanno");
+                if (File.Exists(defaultAnnotation))
+                {
+                    LoadAnnotationsFromFile(defaultAnnotation, suppressPdfReload: true);
+                }
             }
+            catch (Exception ex)
+            {
+                MessageBox.Show("PDF를 열 수 없습니다: " + ex.Message, "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void ClearAllAnnotations_Click(object sender, RoutedEventArgs e)
+        {
+            if (_pdf == null || _pageInkCanvases.Count == 0)
+            {
+                MessageBox.Show("지울 주석이 없습니다.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (MessageBox.Show("모든 페이지의 필기/도형/텍스트를 삭제할까요?", "전체 지우기",
+                MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            _recordHistory = false;
+            try
+            {
+                foreach (var canvas in _pageInkCanvases.Values)
+                {
+                    canvas.Strokes.Clear();
+
+                    var removable = canvas.Children
+                        .OfType<UIElement>()
+                        .Where(IsSerializableElement)
+                        .ToList();
+
+                    foreach (var element in removable)
+                    {
+                        canvas.Children.Remove(element);
+                        _textTool.NotifyElementRemoved(element);
+                    }
+                }
+                ClearHistory();
+            }
+            finally
+            {
+                _recordHistory = true;
+            }
+        }
+
+        private void ExportAnnotatedPdf_Click(object sender, RoutedEventArgs e)
+        {
+            if (_pdf == null)
+            {
+                MessageBox.Show("먼저 PDF를 열어주세요.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var pages = CaptureAnnotatedPages();
+            if (pages.Count == 0)
+            {
+                MessageBox.Show("내보낼 페이지가 없습니다.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dlg = new SaveFileDialog
+            {
+                Filter = "PDF Files|*.pdf",
+                FileName = System.IO.Path.ChangeExtension(System.IO.Path.GetFileName(_currentPdfPath) ?? "annotated", ".annotated.pdf")
+            };
+
+            if (dlg.ShowDialog() == true)
+            {
+                try
+                {
+                    WriteFlattenedPdf(dlg.FileName, pages);
+                    MessageBox.Show("주석이 포함된 PDF를 저장했습니다.", "완료", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("PDF 내보내기에 실패했습니다: " + ex.Message, "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+        }
+
+        private List<AnnotatedPageImage> CaptureAnnotatedPages()
+        {
+            var images = new List<AnnotatedPageImage>();
+            if (_pdf == null)
+                return images;
+
+            double renderDpi = 200; // balance quality vs size
+            for (int pageIndex = 0; pageIndex < _pdf.PageCount; pageIndex++)
+            {
+                var baseImage = RenderPdfPageImage(pageIndex, (int)renderDpi);
+                if (baseImage == null)
+                    continue;
+
+                System.Drawing.SizeF sizePoints;
+                if (pageIndex < _pageSizesPoints.Count)
+                {
+                    sizePoints = _pageSizesPoints[pageIndex];
+                }
+                else
+                {
+                    double dpiX = baseImage.DpiX <= 0 ? 96.0 : baseImage.DpiX;
+                    double dpiY = baseImage.DpiY <= 0 ? 96.0 : baseImage.DpiY;
+                    sizePoints = new System.Drawing.SizeF((float)(baseImage.PixelWidth / dpiX * 72.0), (float)(baseImage.PixelHeight / dpiY * 72.0));
+                }
+                double width = sizePoints.Width / 72.0 * 96.0;
+                double height = sizePoints.Height / 72.0 * 96.0;
+
+                var container = new Grid
+                {
+                    Width = width,
+                    Height = height,
+                    Background = Brushes.White
+                };
+                container.Children.Add(new Image
+                {
+                    Source = baseImage,
+                    Width = width,
+                    Height = height,
+                    Stretch = Stretch.Fill
+                });
+
+                if (_pageInkCanvases.TryGetValue(pageIndex, out InkCanvas originalCanvas))
+                {
+                    var cloneCanvas = CloneCanvasForExport(originalCanvas);
+                    var viewbox = new Viewbox
+                    {
+                        Width = width,
+                        Height = height,
+                        Stretch = Stretch.Fill,
+                        Child = cloneCanvas
+                    };
+                    container.Children.Add(viewbox);
+                }
+
+                container.Measure(new Size(width, height));
+                container.Arrange(new Rect(0, 0, width, height));
+                container.UpdateLayout();
+
+                double dpi = renderDpi;
+                int pixelWidth = (int)Math.Ceiling(width / 96.0 * dpi);
+                int pixelHeight = (int)Math.Ceiling(height / 96.0 * dpi);
+                if (pixelWidth <= 0 || pixelHeight <= 0)
+                    continue;
+
+                var rtb = new RenderTargetBitmap(pixelWidth, pixelHeight, dpi, dpi, PixelFormats.Pbgra32);
+                rtb.Render(container);
+
+                byte[] data;
+                var encoder = new JpegBitmapEncoder { QualityLevel = 90 };
+                encoder.Frames.Add(BitmapFrame.Create(rtb));
+                using (var ms = new MemoryStream())
+                {
+                    encoder.Save(ms);
+                    data = ms.ToArray();
+                }
+
+                double widthPoints = sizePoints.Width;
+                double heightPoints = sizePoints.Height;
+                images.Add(new AnnotatedPageImage
+                {
+                    PixelWidth = pixelWidth,
+                    PixelHeight = pixelHeight,
+                    WidthPoints = widthPoints,
+                    HeightPoints = heightPoints,
+                    ImageBytes = data
+                });
+            }
+
+            return images;
+        }
+
+        private BitmapSource RenderPdfPageImage(int pageIndex, int dpi)
+        {
+            if (_pdf == null) return null;
+            using (var img = _pdf.Render(pageIndex, dpi, dpi, true))
+            {
+                return ImageToImageSource(img);
+            }
+        }
+
+        private void WriteFlattenedPdf(string path, List<AnnotatedPageImage> pages)
+        {
+            using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+            {
+                var writer = new StreamWriter(fs, Encoding.ASCII);
+                writer.WriteLine("%PDF-1.4");
+                writer.Flush();
+
+                var offsets = new List<long>();
+                int nextObj = 1;
+                int catalogId = nextObj++;
+                int pagesId = nextObj++;
+                var pageInfos = new List<(AnnotatedPageImage Page, int ImageId, int ContentId, int PageId, string ImageName)>();
+
+                for (int i = 0; i < pages.Count; i++)
+                {
+                    pageInfos.Add((pages[i], nextObj++, nextObj++, nextObj++, $"Im{i + 1}"));
+                }
+
+                void WriteObject(Action<BinaryWriter> bodyWriter)
+                {
+                    offsets.Add(fs.Position);
+                    using (var bw = new BinaryWriter(fs, Encoding.ASCII, leaveOpen: true))
+                    {
+                        bodyWriter(bw);
+                        bw.Flush();
+                    }
+                }
+
+                var culture = CultureInfo.InvariantCulture;
+
+                // Image objects
+                foreach (var info in pageInfos)
+                {
+                    var page = info.Page;
+                    WriteObject(bw =>
+                    {
+                        bw.Write(Encoding.ASCII.GetBytes($"{info.ImageId} 0 obj\n"));
+                        bw.Write(Encoding.ASCII.GetBytes($"<< /Type /XObject /Subtype /Image /Width {page.PixelWidth} /Height {page.PixelHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {page.ImageBytes.Length} >>\n"));
+                        bw.Write(Encoding.ASCII.GetBytes("stream\n"));
+                        bw.Write(page.ImageBytes);
+                        bw.Write(Encoding.ASCII.GetBytes("\nendstream\nendobj\n"));
+                    });
+                }
+
+                // Content streams
+                foreach (var info in pageInfos)
+                {
+                    var page = info.Page;
+                    string content = string.Format(culture, "q {0:0.###} 0 0 {1:0.###} 0 0 cm /{2} Do Q\n", page.WidthPoints, page.HeightPoints, info.ImageName);
+                    byte[] contentBytes = Encoding.ASCII.GetBytes(content);
+                    WriteObject(bw =>
+                    {
+                        bw.Write(Encoding.ASCII.GetBytes($"{info.ContentId} 0 obj\n"));
+                        bw.Write(Encoding.ASCII.GetBytes($"<< /Length {contentBytes.Length} >>\nstream\n"));
+                        bw.Write(contentBytes);
+                        bw.Write(Encoding.ASCII.GetBytes("endstream\nendobj\n"));
+                    });
+                }
+
+                // Page objects
+                foreach (var info in pageInfos)
+                {
+                    var page = info.Page;
+                    string pageObj = string.Format(culture,
+                        "{0} 0 obj\n<< /Type /Page /Parent {1} 0 R /MediaBox [0 0 {2:0.###} {3:0.###}] /Resources << /XObject << /{4} {5} 0 R >> >> /Contents {6} 0 R >>\nendobj\n",
+                        info.PageId, pagesId, page.WidthPoints, page.HeightPoints, info.ImageName, info.ImageId, info.ContentId);
+                    WriteObject(bw => bw.Write(Encoding.ASCII.GetBytes(pageObj)));
+                }
+
+                // Pages object
+                string kids = string.Join(" ", pageInfos.Select(p => $"{p.PageId} 0 R"));
+                WriteObject(bw =>
+                {
+                    string body = $"{pagesId} 0 obj\n<< /Type /Pages /Kids [{kids}] /Count {pageInfos.Count} >>\nendobj\n";
+                    bw.Write(Encoding.ASCII.GetBytes(body));
+                });
+
+                // Catalog object
+                WriteObject(bw =>
+                {
+                    string body = $"{catalogId} 0 obj\n<< /Type /Catalog /Pages {pagesId} 0 R >>\nendobj\n";
+                    bw.Write(Encoding.ASCII.GetBytes(body));
+                });
+
+                long xrefPosition = fs.Position;
+                using (var bw = new BinaryWriter(fs, Encoding.ASCII, leaveOpen: true))
+                {
+                    bw.Write(Encoding.ASCII.GetBytes($"xref\n0 {nextObj}\n"));
+                    bw.Write(Encoding.ASCII.GetBytes("0000000000 65535 f \n"));
+                    foreach (var offset in offsets)
+                    {
+                        bw.Write(Encoding.ASCII.GetBytes(string.Format(CultureInfo.InvariantCulture, "{0:0000000000} 00000 n \n", offset)));
+                    }
+                    bw.Write(Encoding.ASCII.GetBytes($"trailer\n<< /Size {nextObj} /Root {catalogId} 0 R >>\nstartxref\n{xrefPosition}\n%%EOF"));
+                }
+            }
+        }
+
+        private void SaveAnnotationsToFile(string path)
+        {
+            try
+            {
+                var root = new XElement("PdfAnnotations",
+                    new XAttribute("Version", "1"),
+                    new XElement("PdfPath", _currentPdfPath ?? string.Empty));
+
+                var pagesElement = new XElement("Pages");
+
+                foreach (var kvp in _pageInkCanvases)
+                {
+                    int pageIndex = kvp.Key;
+                    InkCanvas canvas = kvp.Value;
+                    var pageElement = new XElement("Page", new XAttribute("Index", pageIndex));
+
+                    string strokes = SerializeStrokes(canvas.Strokes);
+                    if (!string.IsNullOrEmpty(strokes))
+                    {
+                        pageElement.Add(new XElement("Strokes", strokes));
+                    }
+
+                    var elementsElement = SerializeElements(canvas);
+                    if (elementsElement != null)
+                    {
+                        pageElement.Add(elementsElement);
+                    }
+
+                    if (pageElement.HasElements)
+                    {
+                        pagesElement.Add(pageElement);
+                    }
+                }
+
+                root.Add(pagesElement);
+                var doc = new XDocument(root);
+                doc.Save(path);
+                _currentAnnotationPath = path;
+                MessageBox.Show("주석을 저장했습니다.", "저장 완료", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("주석을 저장할 수 없습니다: " + ex.Message, "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void LoadAnnotationsFromFile(string path, bool suppressPdfReload = false)
+        {
+            if (!File.Exists(path))
+            {
+                MessageBox.Show("주석 파일을 찾을 수 없습니다.", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            try
+            {
+                var doc = XDocument.Load(path);
+                var root = doc.Root;
+                if (root == null)
+                    throw new InvalidDataException("잘못된 주석 파일입니다.");
+
+                string pdfPath = root.Element("PdfPath")?.Value;
+                if (!suppressPdfReload && !string.IsNullOrWhiteSpace(pdfPath) && File.Exists(pdfPath))
+                {
+                    LoadPdfFromPath(pdfPath);
+                }
+                else if (_pdf == null)
+                {
+                    MessageBox.Show("주석과 연결된 PDF를 먼저 열어야 합니다.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                var pageNodes = root.Element("Pages")?.Elements("Page");
+                if (pageNodes == null)
+                {
+                    MessageBox.Show("주석 파일에 저장된 내용이 없습니다.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                _currentAnnotationPath = path;
+                _recordHistory = false;
+                try
+                {
+                    foreach (var pageNode in pageNodes)
+                    {
+                        int pageIndex = (int?)pageNode.Attribute("Index") ?? -1;
+                        if (!_pageInkCanvases.TryGetValue(pageIndex, out InkCanvas canvas))
+                            continue;
+
+                        string strokesData = pageNode.Element("Strokes")?.Value;
+                        var strokes = DeserializeStrokes(strokesData);
+                        if (strokes != null)
+                        {
+                            foreach (var stroke in strokes)
+                            {
+                                canvas.Strokes.Add(stroke);
+                                EnsureStrokeId(stroke);
+                            }
+                        }
+
+                        var elementsNode = pageNode.Element("Elements");
+                        if (elementsNode != null)
+                        {
+                            foreach (var elementNode in elementsNode.Elements("Element"))
+                            {
+                                string xaml = elementNode.Value;
+                                var element = DeserializeElement(xaml);
+                                if (element == null)
+                                    continue;
+                                canvas.Children.Add(element);
+                                if (element is TextBox textBox)
+                                {
+                                    _textTool.RegisterExistingTextBox(canvas, textBox);
+                                }
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    _recordHistory = true;
+                }
+
+                MessageBox.Show("주석을 불러왔습니다.", "불러오기 완료", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("주석을 불러올 수 없습니다: " + ex.Message, "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private string SerializeStrokes(StrokeCollection strokes)
+        {
+            if (strokes == null || strokes.Count == 0)
+                return null;
+
+            using (var ms = new MemoryStream())
+            {
+                strokes.Save(ms);
+                return Convert.ToBase64String(ms.ToArray());
+            }
+        }
+
+        private StrokeCollection DeserializeStrokes(string base64)
+        {
+            if (string.IsNullOrWhiteSpace(base64))
+                return null;
+
+            byte[] bytes = Convert.FromBase64String(base64);
+            using (var ms = new MemoryStream(bytes))
+            {
+                return new StrokeCollection(ms);
+            }
+        }
+
+        private XElement SerializeElements(InkCanvas canvas)
+        {
+            var elements = new XElement("Elements");
+            foreach (UIElement child in canvas.Children)
+            {
+                if (!IsSerializableElement(child))
+                    continue;
+                string xaml = XamlWriter.Save(child);
+                elements.Add(new XElement("Element", new XCData(xaml)));
+            }
+            return elements.HasElements ? elements : null;
+        }
+
+        private UIElement DeserializeElement(string xaml)
+        {
+            if (string.IsNullOrWhiteSpace(xaml))
+                return null;
+
+            using (var stringReader = new StringReader(xaml))
+            using (var xmlReader = XmlReader.Create(stringReader))
+            {
+                return XamlReader.Load(xmlReader) as UIElement;
+            }
+        }
+
+        private bool IsSerializableElement(UIElement element)
+        {
+            if (element is TextBox textBox)
+            {
+                return Equals(textBox.Tag as string, TextToolManager.TextElementTag);
+            }
+
+            if (element is Shape shape)
+            {
+                return Equals(shape.Tag, ShapeToolManager.ShapeElementTag);
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -100,6 +661,9 @@ namespace PDFEditor
             _pageInkCanvases.Clear();
             _penCursorManager.Clear();
             _inkCanvasPageIndex.Clear();
+            _textTool.Clear();
+            _pageSizesPoints.Clear();
+            _pageSizesPoints.Clear();
             ClearHistory();
             _copiedShapes.Clear();
             _copiedStrokes.Clear();
@@ -127,7 +691,19 @@ namespace PDFEditor
                         _pageImageWidth = bitmapSource.PixelWidth;
                     }
 
-                    //실제 페이지 크기 (DIP 단위)
+                    System.Drawing.SizeF pageSizePoints;
+                    if (_pdf.PageSizes != null && pageIndex < _pdf.PageSizes.Count)
+                    {
+                        pageSizePoints = _pdf.PageSizes[pageIndex];
+                    }
+                    else
+                    {
+                        pageSizePoints = new System.Drawing.SizeF(
+                            (float)(bitmapSource.Width / 96.0 * 72.0),
+                            (float)(bitmapSource.Height / 96.0 * 72.0));
+                    }
+                    _pageSizesPoints.Add(pageSizePoints);
+
                     double pageWidth = bitmapSource.Width;
                     double pageHeight = bitmapSource.Height;
 
@@ -149,15 +725,17 @@ namespace PDFEditor
                         ClipToBounds = true //필기 밖으로 나가는 부분 자르기
                     };
                     ink.RequestBringIntoView += SuppressBringIntoView; // 페이지 클릭 시 자동 스크롤 방지
+                    ink.PreviewMouseDown += InkCanvas_PreviewMouseDown;
                     ink.StrokeCollected += InkCanvas_StrokeCollected;
                     ink.Strokes.StrokesChanged += InkCanvas_StrokesChanged;
-
                     _inkTool.SetTool(_inkTool.CurrentTool, ink); // 현재 선택된 필기 도구 적용
                     ApplyCurrentColorAndThicknessToInkCanvas(ink); // 색/두께 동기화
 
                     _shapeTool.AttachCanvas(ink); // 도형 드로잉/지우기 이벤트 연결
                     _selectionTool.AttachCanvas(ink); // 선택 도구 이벤트 연결
                     _penCursorManager.AttachCanvas(ink); // 펜 위치 표시 연결
+                    _textTool.AttachCanvas(ink);
+                    _areaEraserManager.AttachCanvas(ink);
 
                     var pageGrid = new Grid 
                     {
@@ -181,16 +759,15 @@ namespace PDFEditor
                     };
                     pageBorder.RequestBringIntoView += SuppressBringIntoView;
 
-                    pageBorder.Child = pageGrid;
+            pageBorder.Child = pageGrid;
 
-                    PagesPanel.Children.Add(pageBorder);
+            PagesPanel.Children.Add(pageBorder);
 
                     _pageInkCanvases[pageIndex] = ink;
                     _inkCanvasPageIndex[ink] = pageIndex;
                 }
             }
-            bool penLikeTool = _inkTool.CurrentTool == DrawTool.Pen || _inkTool.CurrentTool == DrawTool.Highlighter;
-            _penCursorManager.SetEnabled(penLikeTool);
+            _penCursorManager.SetEnabled(true);
 
             ScrollToPage(0);
         }
@@ -400,6 +977,21 @@ namespace PDFEditor
             pageIndex = -1;
             return false;
         }
+
+        private bool TryGetPageIndex(TextBox textBox, out int pageIndex)
+        {
+            pageIndex = -1;
+            if (textBox == null)
+                return false;
+
+            InkCanvas canvas;
+            if (_textTool.TryGetOwnerCanvas(textBox, out canvas))
+            {
+                return TryGetPageIndex(canvas, out pageIndex);
+            }
+
+            return false;
+        }
         /// <summary>
         /// 필기/도형/지우개 토글 버튼 공용 핸들러.
         /// 필기 도구 선택 시 모든 페이지 InkCanvas에 EditingMode를 일괄 적용한다.
@@ -419,10 +1011,20 @@ namespace PDFEditor
             if (EllipseButton != null) EllipseButton.IsChecked = false;
             if (LineButton != null) LineButton.IsChecked = false;
             if (TriangleButton != null) TriangleButton.IsChecked = false;
+            if (TextButton != null) TextButton.IsChecked = false;
 
             clicked.IsChecked = true;
 
             string tag = clicked.Tag as string ?? "";
+            bool isTextTool = tag == "Text";
+            _textTool.SetActive(isTextTool);
+            if (!isTextTool)
+            {
+                HideTextToolbar();
+            }
+            UpdateCursorMode(tag);
+            _areaEraserManager.SetEnabled(tag == "Eraser");
+
             // 🔹 1) 선택 도구
             if (tag == "Select")
             {
@@ -430,9 +1032,24 @@ namespace PDFEditor
                 _shapeTool.SetShape(ShapeType.None);
                 _shapeTool.SetShapeEraseMode(false);
                 _selectionTool.SetEnabled(true);
-                _penCursorManager.SetEnabled(false);
+                foreach (InkCanvas canvas in _pageInkCanvases.Values)
+                {
+                    canvas.EditingMode = InkCanvasEditingMode.None;
+                }
 
                 // InkCanvas 필기/지우개 모두 끄기 (선택만 할 수 있게)
+                return;
+            }
+            else
+            {
+                _selectionTool.SetEnabled(false);
+            }
+
+            if (isTextTool)
+            {
+                _shapeTool.SetShape(ShapeType.None);
+                _shapeTool.SetShapeEraseMode(false);
+
                 foreach (InkCanvas canvas in _pageInkCanvases.Values)
                 {
                     canvas.EditingMode = InkCanvasEditingMode.None;
@@ -440,10 +1057,7 @@ namespace PDFEditor
 
                 return;
             }
-            else
-            {
-                _selectionTool.SetEnabled(false);
-            }
+
             // 🔹 2) 펜 / 형광펜 / 지우개
             if (tag == "Pen" || tag == "Highlighter" || tag == "Eraser")
             {
@@ -463,7 +1077,6 @@ namespace PDFEditor
                         _inkTool.SetTool(DrawTool.Eraser, canvas);
                 }
 
-                _penCursorManager.SetEnabled(tag == "Pen" || tag == "Highlighter");
                 return;
             }
 
@@ -476,7 +1089,6 @@ namespace PDFEditor
 
             // 도형 선택 시에는 도형 지우개 모드 끔
             _shapeTool.SetShapeEraseMode(false);
-            _penCursorManager.SetEnabled(false);
 
             switch (tag)
             {
@@ -525,6 +1137,125 @@ namespace PDFEditor
                 _inkTool.SetColor(color, canvas);
             }
         }
+
+        private void TextColorToolbarButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (TextColorToolbarButton?.ContextMenu == null)
+                return;
+
+            TextColorToolbarButton.ContextMenu.PlacementTarget = TextColorToolbarButton;
+            TextColorToolbarButton.ContextMenu.Placement = PlacementMode.Bottom;
+            TextColorToolbarButton.ContextMenu.IsOpen = true;
+            e.Handled = true;
+        }
+
+        private void TextColorMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem item && item.Tag != null)
+            {
+                Color color = (Color)ColorConverter.ConvertFromString(item.Tag.ToString());
+                ApplyTextColor(color);
+            }
+        }
+
+        private void TextFontIncreaseButton_Click(object sender, RoutedEventArgs e)
+        {
+            AdjustActiveTextFontSize(TextFontStep);
+        }
+
+        private void TextFontDecreaseButton_Click(object sender, RoutedEventArgs e)
+        {
+            AdjustActiveTextFontSize(-TextFontStep);
+        }
+
+        private void AdjustActiveTextFontSize(double delta)
+        {
+            var active = _textTool.GetActiveTextBox();
+            if (active == null)
+                return;
+
+            double current = active.FontSize;
+            if (double.IsNaN(current) || current <= 0)
+                current = _textDefaultFontSize;
+
+            double newSize = current + delta;
+            newSize = Math.Max(MinTextFontSize, Math.Min(MaxTextFontSize, newSize));
+            ApplyFontSizeToTextBox(active, newSize);
+        }
+
+        private void ApplyFontSizeToTextBox(TextBox textBox, double size)
+        {
+            if (textBox == null || size <= 0)
+                return;
+
+            double previous = double.IsNaN(textBox.FontSize) ? _textDefaultFontSize : textBox.FontSize;
+            if (Math.Abs(previous - size) < 0.1)
+                return;
+
+            _textDefaultFontSize = size;
+            _textTool.SetDefaultFontSize(size);
+            _textTool.ApplyFontSize(textBox, size);
+            RegisterTextStyleChange(textBox, previous, size, (tb, value) => tb.FontSize = (double)value);
+            _textTool.RefreshLayout(textBox);
+            RestoreTextEditingFocus();
+        }
+
+        private void ApplyTextColor(Color color)
+        {
+            _textDefaultFontColor = color;
+            _textTool.SetDefaultForeground(new SolidColorBrush(color));
+
+            var active = _textTool.GetActiveTextBox();
+            if (active == null)
+                return;
+
+            Brush oldBrush = CloneBrush(active.Foreground);
+            _textTool.ApplyForeground(active, new SolidColorBrush(color));
+            Brush newBrush = CloneBrush(active.Foreground);
+
+            RegisterTextStyleChange(active, oldBrush, newBrush, (tb, value) => tb.Foreground = (Brush)value);
+            RestoreTextEditingFocus();
+        }
+
+        private Brush CloneBrush(Brush brush)
+        {
+            if (brush == null)
+                return null;
+
+            var clone = brush.CloneCurrentValue();
+            if (clone.CanFreeze)
+                clone.Freeze();
+            return clone;
+        }
+
+
+        private bool TryExecuteInkCanvasCommand(ICommand command)
+        {
+            if (command == null)
+                return false;
+
+            var canvas = GetCurrentInkCanvas();
+            if (canvas == null)
+                return false;
+
+            if (command is RoutedCommand routed)
+            {
+                if (routed.CanExecute(null, canvas))
+                {
+                    routed.Execute(null, canvas);
+                    return true;
+                }
+                return false;
+            }
+
+            if (command.CanExecute(null))
+            {
+                command.Execute(null);
+                return true;
+            }
+
+            return false;
+        }
         /// <summary>
         /// 두께 슬라이더 변경 시 펜 도구/도형 도구 두께를 동시에 갱신한다.
         /// </summary>
@@ -548,6 +1279,7 @@ namespace PDFEditor
             }
             _shapeTool.SetStroke(new SolidColorBrush(color), thickness);
             _penCursorManager.SetThickness(thickness);
+            _areaEraserManager.SetRadius(thickness);
 
             // 모든 페이지의 InkCanvas에 적용
             foreach (InkCanvas canvas in _pageInkCanvases.Values)
@@ -590,6 +1322,41 @@ namespace PDFEditor
             _inkTool.SetThickness(thickness, ink);
 
             _shapeTool.SetStroke(new SolidColorBrush(color), thickness);
+        }
+
+        private void InitializeTextToolDefaults()
+        {
+            _textTool.SetDefaultFontSize(_textDefaultFontSize);
+            _textTool.SetDefaultForeground(new SolidColorBrush(_textDefaultFontColor));
+        }
+
+        private void RestoreTextEditingFocus()
+        {
+            var editing = _textTool.GetEditingTextBox();
+            if (editing == null)
+                return;
+
+            editing.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                editing.Focus();
+                Keyboard.Focus(editing);
+            }), System.Windows.Threading.DispatcherPriority.Input);
+        }
+
+        private void RegisterTextStyleChange(TextBox textBox, object oldValue, object newValue, Action<TextBox, object> setter)
+        {
+            if (textBox == null || setter == null)
+                return;
+            if (oldValue == null && newValue == null)
+                return;
+            if (oldValue != null && oldValue.Equals(newValue))
+                return;
+
+            int pageIndex;
+            if (!TryGetPageIndex(textBox, out pageIndex))
+                return;
+
+            PushUndoAction(new TextStyleChangedAction(pageIndex, textBox, oldValue, newValue, setter));
         }
 
         /// <summary>
@@ -639,23 +1406,59 @@ namespace PDFEditor
 
         private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            Debug.WriteLine($"[Key] Key={e.Key}, SystemKey={e.SystemKey}, Modifiers={Keyboard.Modifiers}");
+
+            if (_textTool.HandleKeyDown(e))
+            {
+                e.Handled = true;
+                return;
+            }
+
             ModifierKeys mods = Keyboard.Modifiers;
             bool ctrl = (mods & ModifierKeys.Control) == ModifierKeys.Control;
             if (ctrl)
             {
-                switch (e.Key)
+                Key key = e.Key;
+                if (key == Key.System)
+                    key = e.SystemKey;
+                if (key == Key.ImeProcessed)
+                    key = e.ImeProcessedKey;
+
+                switch (key)
                 {
                     case Key.Z:
-                        if ((mods & ModifierKeys.Shift) == ModifierKeys.Shift)
+                    {
+                        bool redo = (mods & ModifierKeys.Shift) == ModifierKeys.Shift;
+                        bool handled = TryExecuteInkCanvasCommand(redo ? ApplicationCommands.Redo : ApplicationCommands.Undo);
+                        if (!handled)
                         {
-                            PerformRedo();
+                            handled = redo ? PerformRedo() : PerformUndo();
                         }
-                        else
-                        {
-                            PerformUndo();
-                        }
+                        e.Handled = handled;
+                        break;
+                    }
+                    case Key.O:
+                    {
+                        ShowOpenPdfDialog();
                         e.Handled = true;
                         break;
+                    }
+                    case Key.S:
+                    {
+                        SaveAnnotation_Click(this, new RoutedEventArgs());
+                        e.Handled = true;
+                        break;
+                    }
+                    case Key.Y:
+                    {
+                        bool handled = TryExecuteInkCanvasCommand(ApplicationCommands.Redo);
+                        if (!handled)
+                        {
+                            handled = PerformRedo();
+                        }
+                        e.Handled = handled;
+                        break;
+                    }
                     case Key.C:
                         CopySelectedShape();
                         e.Handled = true;
@@ -771,6 +1574,7 @@ namespace PDFEditor
             var canvas = GetCurrentInkCanvas();
             if (canvas == null)
                 return;
+            ActivateCanvasPage(canvas, updateTool: true);
 
             var newElements = new List<UIElement>();
             var newStrokes = new List<Stroke>();
@@ -790,6 +1594,10 @@ namespace PDFEditor
 
                         ApplyPasteOffset(element, info);
                         canvas.Children.Add(element);
+                        if (element is TextBox pastedTextBox)
+                        {
+                            _textTool.RegisterExistingTextBox(canvas, pastedTextBox);
+                        }
                         newElements.Add(element);
                     }
                     catch
@@ -809,6 +1617,7 @@ namespace PDFEditor
                     var stroke = template.Clone();
                     TranslateStroke(stroke, 12, 12);
                     canvas.Strokes.Add(stroke);
+                    EnsureStrokeId(stroke);
                     newStrokes.Add(stroke);
                 }
             }
@@ -845,7 +1654,7 @@ namespace PDFEditor
                 if (!canvas.Children.Contains(element))
                     continue;
 
-                canvas.Children.Remove(element);
+                RemoveShapeFromCanvas(canvas, element);
                 actions.Add(new ShapeRemovedAction(pageIndex, element));
             }
 
@@ -866,7 +1675,9 @@ namespace PDFEditor
                     {
                         canvas.Strokes.Remove(stroke);
                     }
-                    actions.Add(new StrokeRemovedAction(pageIndex, strokesToRemove));
+                    var ids = strokesToRemove.Select(s => EnsureStrokeId(s)).ToList();
+                    var snapshots = strokesToRemove.Select(s => CloneStrokeWithId(s)).ToList();
+                    actions.Add(new StrokeCollectionChangedAction(pageIndex, ids, snapshots, new List<Guid>(), new List<Stroke>()));
                 }
             }
 
@@ -969,7 +1780,9 @@ namespace PDFEditor
                 {
                     if (stroke == null)
                         continue;
-                    actions.Add(new StrokeAddedAction(pageIndex, stroke));
+                    Guid id = EnsureStrokeId(stroke);
+                    var snapshot = CloneStrokeWithId(stroke);
+                    actions.Add(new StrokeAddedAction(pageIndex, id, snapshot));
                 }
             }
 
@@ -979,28 +1792,32 @@ namespace PDFEditor
             }
         }
 
-        private void PerformUndo()
+        private bool PerformUndo()
         {
+            Debug.WriteLine(">>> PerformUndo 호출");
             if (_undoStack.Count == 0)
-                return;
+                return false;
 
             var action = _undoStack.Pop();
             _recordHistory = false;
             action.Undo(this);
             _recordHistory = true;
             _redoStack.Push(action);
+            return true;
         }
 
-        private void PerformRedo()
+        private bool PerformRedo()
         {
+            Debug.WriteLine(">>> PerformRedo 호출");
             if (_redoStack.Count == 0)
-                return;
+                return false;
 
             var action = _redoStack.Pop();
             _recordHistory = false;
             action.Redo(this);
             _recordHistory = true;
             _undoStack.Push(action);
+            return true;
         }
 
         private void PushUndoAction(IUndoRedoAction action)
@@ -1020,6 +1837,7 @@ namespace PDFEditor
 
         private void ShapeTool_ShapeCreated(InkCanvas canvas, UIElement element)
         {
+            ActivateCanvasPage(canvas);
             RegisterShapeAddition(canvas, element);
         }
 
@@ -1031,6 +1849,106 @@ namespace PDFEditor
                 _selectionTool.ClearSelection(canvas);
             }
             RegisterShapeRemoval(canvas, element);
+        }
+
+        private void TextTool_TextBoxCreated(InkCanvas canvas, TextBox textBox)
+        {
+            ActivateCanvasPage(canvas);
+            RegisterShapeAddition(canvas, textBox);
+        }
+
+        private void TextTool_TextBoxRemoved(InkCanvas canvas, TextBox textBox)
+        {
+            RegisterShapeRemoval(canvas, textBox);
+        }
+
+        private void TextTool_TextCommitted(InkCanvas canvas, TextBox textBox, string oldText, string newText)
+        {
+            if (string.Equals(oldText, newText, StringComparison.Ordinal))
+                return;
+
+            int pageIndex;
+            if (!TryGetPageIndex(canvas, out pageIndex))
+                return;
+
+            PushUndoAction(new TextEditedAction(pageIndex, textBox, oldText, newText));
+        }
+
+        private void AreaEraser_ElementErased(InkCanvas canvas, UIElement element)
+        {
+            ActivateCanvasPage(canvas);
+            RegisterShapeRemoval(canvas, element);
+            RemoveShapeFromCanvas(canvas, element);
+        }
+
+        private void SelectionTool_TextElementDoubleClicked(InkCanvas canvas, TextBox textBox)
+        {
+            if (textBox == null)
+                return;
+
+            ActivateCanvasPage(canvas, updateTool: true);
+
+            if (TextButton != null)
+            {
+                ToolButton_Click(TextButton, new RoutedEventArgs(ButtonBase.ClickEvent));
+            }
+
+            _textTool.BeginEditingExistingTextBox(textBox, selectAll: true);
+        }
+
+        private void TextTool_ActiveTextBoxChanged(TextBox textBox)
+        {
+            if (textBox == null)
+            {
+                HideTextToolbar();
+                return;
+            }
+
+            UpdateTextToolbarTarget(textBox);
+        }
+
+        private void TextTool_EditingStateChanged(TextBox textBox, bool isEditing)
+        {
+            if (!_textTool.IsActive)
+            {
+                HideTextToolbar();
+                return;
+            }
+
+            if (textBox == null)
+            {
+                HideTextToolbar();
+                return;
+            }
+
+            UpdateTextToolbarTarget(textBox);
+        }
+
+        private void UpdateTextToolbarTarget(TextBox textBox)
+        {
+            if (TextMiniToolbar == null)
+                return;
+
+            if (!_textTool.IsActive || textBox == null)
+            {
+                HideTextToolbar();
+                return;
+            }
+
+            TextMiniToolbar.PlacementTarget = textBox;
+            TextMiniToolbar.Placement = PlacementMode.Top;
+            TextMiniToolbar.HorizontalOffset = 0;
+            TextMiniToolbar.VerticalOffset = -4;
+            TextMiniToolbar.IsOpen = true;
+        }
+
+        private void HideTextToolbar()
+        {
+            if (TextMiniToolbar == null)
+                return;
+
+            TextMiniToolbar.IsOpen = false;
+            TextMiniToolbar.PlacementTarget = null;
         }
 
         private void RegisterShapeAddition(InkCanvas canvas, UIElement element)
@@ -1060,39 +1978,69 @@ namespace PDFEditor
         private void InkCanvas_StrokeCollected(object sender, InkCanvasStrokeCollectedEventArgs e)
         {
             if (!_recordHistory) return;
-            var canvas = sender as InkCanvas;
-            if (canvas == null) return;
+            if (!(sender is InkCanvas canvas)) return;
 
-            int pageIndex;
-            if (!TryGetPageIndex(canvas, out pageIndex))
+            ActivateCanvasPage(canvas);
+
+            if (!TryGetPageIndex(canvas, out int pageIndex))
                 return;
 
-            PushUndoAction(new StrokeAddedAction(pageIndex, e.Stroke));
+            Debug.WriteLine($">>> StrokeCollected page={pageIndex}, strokeHash={e.Stroke?.GetHashCode()}");
+
+            Guid strokeId = EnsureStrokeId(e.Stroke);
+            var snapshot = CloneStrokeWithId(e.Stroke);
+            PushUndoAction(new StrokeAddedAction(pageIndex, strokeId, snapshot));
         }
 
         private void InkCanvas_StrokesChanged(object sender, StrokeCollectionChangedEventArgs e)
         {
             if (!_recordHistory) return;
-            if (e.Removed == null || e.Removed.Count == 0)
+            if (!(sender is InkCanvas canvas)) return;
+
+            ActivateCanvasPage(canvas);
+
+            if (!TryGetPageIndex(canvas, out int pageIndex))
                 return;
 
-            var canvas = sender as InkCanvas;
-            if (canvas == null) return;
+            var removedSnapshots = new List<Stroke>();
+            var removedIds = new List<Guid>();
+            if (e.Removed != null)
+            {
+                foreach (var stroke in e.Removed)
+                {
+                    var snapshot = CloneStrokeWithId(stroke);
+                    if (snapshot != null)
+                    {
+                        removedSnapshots.Add(snapshot);
+                        var id = GetStrokeId(snapshot);
+                        if (id.HasValue)
+                            removedIds.Add(id.Value);
+                    }
+                }
+            }
 
-            int pageIndex;
-            if (!TryGetPageIndex(canvas, out pageIndex))
+            // 새로운 스트로크가 추가된 이벤트(removed=0, added>0)는 StrokeCollected에서 이미 처리하므로 무시
+            if (removedSnapshots.Count == 0)
                 return;
 
-            var removed = new List<Stroke>();
-            foreach (var stroke in e.Removed)
+            var addedSnapshots = new List<Stroke>();
+            var addedIds = new List<Guid>();
+            if (e.Added != null)
             {
-                removed.Add(stroke);
+                foreach (var stroke in e.Added)
+                {
+                    addedIds.Add(EnsureStrokeId(stroke));
+                    var snapshot = CloneStrokeWithId(stroke);
+                    if (snapshot != null)
+                    {
+                        addedSnapshots.Add(snapshot);
+                    }
+                }
             }
 
-            if (removed.Count > 0)
-            {
-                PushUndoAction(new StrokeRemovedAction(pageIndex, removed));
-            }
+            Debug.WriteLine($">>> StrokesChanged page={pageIndex}, Added={addedSnapshots.Count}, Removed={removedSnapshots.Count}");
+
+            PushUndoAction(new StrokeCollectionChangedAction(pageIndex, removedIds, removedSnapshots, addedIds, addedSnapshots));
         }
 
         private void RemoveShapeFromCanvas(InkCanvas canvas, UIElement element)
@@ -1103,6 +2051,7 @@ namespace PDFEditor
                 _selectionTool.ClearSelection(canvas);
             }
             canvas.Children.Remove(element);
+            _textTool.NotifyElementRemoved(element);
         }
 
         private void AddShapeToCanvas(InkCanvas canvas, UIElement element)
@@ -1111,6 +2060,185 @@ namespace PDFEditor
             if (!canvas.Children.Contains(element))
             {
                 canvas.Children.Add(element);
+            }
+            if (element is TextBox textBox)
+            {
+                _textTool.RegisterExistingTextBox(canvas, textBox);
+            }
+        }
+
+        private void ApplyTextContent(TextBox textBox, string text)
+        {
+            if (textBox == null)
+                return;
+            textBox.Text = text ?? string.Empty;
+        }
+
+        private void ApplyTextStyle(TextBox textBox, Action<TextBox, object> setter, object value)
+        {
+            if (textBox == null || setter == null)
+                return;
+            setter(textBox, value);
+        }
+
+        private void UpdateCursorMode(string tag)
+        {
+            switch (tag)
+            {
+                case "Eraser":
+                    _penCursorManager.SetMode(PenCursorManager.CursorMode.Eraser);
+                    break;
+                case "Text":
+                    _penCursorManager.SetMode(PenCursorManager.CursorMode.Hidden, Cursors.IBeam);
+                    break;
+                case "Pen":
+                case "Highlighter":
+                    _penCursorManager.SetMode(PenCursorManager.CursorMode.Pen);
+                    break;
+                case "Select":
+                case "Rectangle":
+                case "Ellipse":
+                case "Line":
+                case "Triangle":
+                    _penCursorManager.SetMode(PenCursorManager.CursorMode.Hidden, Cursors.Arrow);
+                    break;
+                default:
+                    _penCursorManager.SetMode(PenCursorManager.CursorMode.Hidden, Cursors.Arrow);
+                    break;
+            }
+        }
+
+        private InkCanvas CloneCanvasForExport(InkCanvas source)
+        {
+            var clone = new InkCanvas
+            {
+                Width = source.Width,
+                Height = source.Height,
+                Background = Brushes.Transparent
+            };
+            clone.Strokes = source.Strokes.Clone();
+
+            foreach (UIElement child in source.Children)
+            {
+                if (!IsSerializableElement(child)) continue;
+                try
+                {
+                    var xaml = XamlWriter.Save(child);
+                    if (XamlReader.Parse(xaml) is UIElement cloned)
+                    {
+                        double left = InkCanvas.GetLeft(child);
+                        double top = InkCanvas.GetTop(child);
+                        if (double.IsNaN(left)) left = 0;
+                        if (double.IsNaN(top)) top = 0;
+                        InkCanvas.SetLeft(cloned, left);
+                        InkCanvas.SetTop(cloned, top);
+                        clone.Children.Add(cloned);
+                    }
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+            return clone;
+        }
+
+        private Guid EnsureStrokeId(Stroke stroke)
+        {
+            if (stroke == null)
+                return Guid.Empty;
+
+            if (stroke.ContainsPropertyData(StrokeIdProperty))
+            {
+                var existing = stroke.GetPropertyData(StrokeIdProperty) as string;
+                if (Guid.TryParse(existing, out Guid parsed))
+                    return parsed;
+            }
+
+            Guid id = Guid.NewGuid();
+            stroke.AddPropertyData(StrokeIdProperty, id.ToString());
+            return id;
+        }
+
+        private Guid? GetStrokeId(Stroke stroke)
+        {
+            if (stroke == null)
+                return null;
+            if (stroke.ContainsPropertyData(StrokeIdProperty))
+            {
+                var existing = stroke.GetPropertyData(StrokeIdProperty) as string;
+                if (Guid.TryParse(existing, out Guid parsed))
+                    return parsed;
+            }
+            return null;
+        }
+
+        private Stroke CloneStrokeWithId(Stroke stroke)
+        {
+            if (stroke == null)
+                return null;
+
+            Guid id = EnsureStrokeId(stroke);
+            Stroke clone = stroke.Clone();
+            if (clone.ContainsPropertyData(StrokeIdProperty))
+                clone.RemovePropertyData(StrokeIdProperty);
+            clone.AddPropertyData(StrokeIdProperty, id.ToString());
+            return clone;
+        }
+
+        private bool TryRemoveStrokeById(InkCanvas canvas, Guid id)
+        {
+            if (canvas == null)
+                return false;
+
+            for (int i = canvas.Strokes.Count - 1; i >= 0; i--)
+            {
+                var stroke = canvas.Strokes[i];
+                var strokeId = GetStrokeId(stroke);
+                if (strokeId.HasValue && strokeId.Value == id)
+                {
+                    canvas.Strokes.Remove(stroke);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private class AnnotatedPageImage
+        {
+            public int PixelWidth { get; set; }
+            public int PixelHeight { get; set; }
+            public double WidthPoints { get; set; }
+            public double HeightPoints { get; set; }
+            public byte[] ImageBytes { get; set; }
+        }
+
+        private void ActivateCanvasPage(InkCanvas canvas, bool updateTool = false)
+        {
+            if (canvas == null)
+                return;
+
+            if (_inkCanvasPageIndex.TryGetValue(canvas, out int pageIndex))
+            {
+                if (_currentPage != pageIndex)
+                {
+                    _currentPage = pageIndex;
+                    UpdatePageInfo();
+                }
+
+                if (updateTool)
+                {
+                    _inkTool.SetTool(_inkTool.CurrentTool, canvas);
+                }
+            }
+        }
+
+        private void InkCanvas_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is InkCanvas canvas)
+            {
+                ActivateCanvasPage(canvas, updateTool: true);
             }
         }
 
@@ -1123,56 +2251,133 @@ namespace PDFEditor
         private class StrokeAddedAction : IUndoRedoAction
         {
             private readonly int _pageIndex;
-            private readonly Stroke _stroke;
+            private readonly Guid _strokeId;
+            private readonly Stroke _snapshot;
 
-            public StrokeAddedAction(int pageIndex, Stroke stroke)
+            public StrokeAddedAction(int pageIndex, Guid strokeId, Stroke snapshot)
             {
                 _pageIndex = pageIndex;
-                _stroke = stroke;
+                _strokeId = strokeId;
+                _snapshot = snapshot;
             }
 
             public void Undo(MainWindow window)
             {
                 var canvas = window.GetInkCanvas(_pageIndex);
-                canvas?.Strokes.Remove(_stroke);
+                if (canvas == null)
+                {
+                    Debug.WriteLine($"StrokeAddedAction.Undo: canvas null for page={_pageIndex}");
+                    return;
+                }
+
+                bool removed = window.TryRemoveStrokeById(canvas, _strokeId);
+                Debug.WriteLine($"StrokeAddedAction.Undo: page={_pageIndex}, removed={removed}, strokeId={_strokeId}");
             }
 
             public void Redo(MainWindow window)
             {
                 var canvas = window.GetInkCanvas(_pageIndex);
-                canvas?.Strokes.Add(_stroke);
+                if (canvas == null)
+                {
+                    Debug.WriteLine($"StrokeAddedAction.Redo: canvas null for page={_pageIndex}");
+                    return;
+                }
+
+                if (_snapshot != null)
+                {
+                    var clone = _snapshot.Clone();
+                    window.EnsureStrokeId(clone);
+                    canvas.Strokes.Add(clone);
+                }
+                Debug.WriteLine($"StrokeAddedAction.Redo: page={_pageIndex}, strokeId={_strokeId}");
             }
         }
 
-        private class StrokeRemovedAction : IUndoRedoAction
+        private class StrokeCollectionChangedAction : IUndoRedoAction
         {
             private readonly int _pageIndex;
-            private readonly List<Stroke> _strokes;
+            private readonly List<Guid> _removedIds;
+            private readonly List<Stroke> _removedSnapshots;
+            private readonly List<Guid> _addedIds;
+            private readonly List<Stroke> _addedSnapshots;
 
-            public StrokeRemovedAction(int pageIndex, List<Stroke> strokes)
+            public StrokeCollectionChangedAction(int pageIndex, List<Guid> removedIds, List<Stroke> removedSnapshots,
+                List<Guid> addedIds, List<Stroke> addedSnapshots)
             {
                 _pageIndex = pageIndex;
-                _strokes = strokes;
+                _removedIds = removedIds ?? new List<Guid>();
+                _removedSnapshots = CloneStrokeList(removedSnapshots);
+                _addedIds = addedIds ?? new List<Guid>();
+                _addedSnapshots = CloneStrokeList(addedSnapshots);
             }
 
             public void Undo(MainWindow window)
             {
                 var canvas = window.GetInkCanvas(_pageIndex);
-                if (canvas == null) return;
-                foreach (var stroke in _strokes)
+                if (canvas == null)
                 {
-                    canvas.Strokes.Add(stroke);
+                    Debug.WriteLine($"StrokeCollectionChangedAction.Undo: canvas null for page={_pageIndex}");
+                    return;
+                }
+
+                Debug.WriteLine($"StrokeCollectionChangedAction.Undo: page={_pageIndex}, removeAdded={_addedIds.Count}, addRemoved={_removedSnapshots.Count}");
+
+                foreach (var id in _addedIds)
+                {
+                    window.TryRemoveStrokeById(canvas, id);
+                }
+
+                foreach (var stroke in _removedSnapshots)
+                {
+                    var clone = stroke?.Clone();
+                    if (clone != null)
+                    {
+                        window.EnsureStrokeId(clone);
+                        canvas.Strokes.Add(clone);
+                    }
                 }
             }
 
             public void Redo(MainWindow window)
             {
                 var canvas = window.GetInkCanvas(_pageIndex);
-                if (canvas == null) return;
-                foreach (var stroke in _strokes)
+                if (canvas == null)
                 {
-                    canvas.Strokes.Remove(stroke);
+                    Debug.WriteLine($"StrokeCollectionChangedAction.Redo: canvas null for page={_pageIndex}");
+                    return;
                 }
+
+                Debug.WriteLine($"StrokeCollectionChangedAction.Redo: page={_pageIndex}, removeRemoved={_removedIds.Count}, addAdded={_addedSnapshots.Count}");
+
+                foreach (var id in _removedIds)
+                {
+                    window.TryRemoveStrokeById(canvas, id);
+                }
+
+                foreach (var stroke in _addedSnapshots)
+                {
+                    var clone = stroke?.Clone();
+                    if (clone != null)
+                    {
+                        window.EnsureStrokeId(clone);
+                        canvas.Strokes.Add(clone);
+                    }
+                }
+            }
+
+            private static List<Stroke> CloneStrokeList(IEnumerable<Stroke> strokes)
+            {
+                var list = new List<Stroke>();
+                if (strokes == null)
+                    return list;
+
+                foreach (var stroke in strokes)
+                {
+                    var clone = stroke?.Clone();
+                    if (clone != null)
+                        list.Add(clone);
+                }
+                return list;
             }
         }
 
@@ -1221,6 +2426,68 @@ namespace PDFEditor
             {
                 var canvas = window.GetInkCanvas(_pageIndex);
                 window.RemoveShapeFromCanvas(canvas, _element);
+            }
+        }
+
+        private class TextEditedAction : IUndoRedoAction
+        {
+            private readonly TextBox _textBox;
+            private readonly string _oldText;
+            private readonly string _newText;
+
+            public TextEditedAction(int pageIndex, TextBox textBox, string oldText, string newText)
+            {
+                _textBox = textBox;
+                _oldText = oldText ?? string.Empty;
+                _newText = newText ?? string.Empty;
+            }
+
+            public void Undo(MainWindow window)
+            {
+                window?.ApplyTextContent(_textBox, _oldText);
+            }
+
+            public void Redo(MainWindow window)
+            {
+                window?.ApplyTextContent(_textBox, _newText);
+            }
+        }
+
+        private class TextStyleChangedAction : IUndoRedoAction
+        {
+            private readonly TextBox _textBox;
+            private readonly object _oldValue;
+            private readonly object _newValue;
+            private readonly Action<TextBox, object> _setter;
+
+            public TextStyleChangedAction(int pageIndex, TextBox textBox, object oldValue, object newValue, Action<TextBox, object> setter)
+            {
+                _textBox = textBox;
+                _setter = setter;
+                _oldValue = CloneValue(oldValue);
+                _newValue = CloneValue(newValue);
+            }
+
+            private static object CloneValue(object value)
+            {
+                if (value is Brush brush)
+                {
+                    var clone = brush.CloneCurrentValue();
+                    if (clone.CanFreeze) clone.Freeze();
+                    return clone;
+                }
+
+                return value;
+            }
+
+            public void Undo(MainWindow window)
+            {
+                window?.ApplyTextStyle(_textBox, _setter, _oldValue);
+            }
+
+            public void Redo(MainWindow window)
+            {
+                window?.ApplyTextStyle(_textBox, _setter, _newValue);
             }
         }
 

@@ -22,6 +22,16 @@ namespace PDFEditor.Ink
         private double _thickness = 3.0;
         private bool _enabled = true;
 
+        public enum CursorMode
+        {
+            Pen,
+            Eraser,
+            Hidden
+        }
+
+        private CursorMode _mode = CursorMode.Pen;
+        private Cursor _fallbackCursor = Cursors.Arrow;
+
         public void AttachCanvas(InkCanvas canvas)
         {
             if (canvas == null || _entries.ContainsKey(canvas))
@@ -54,7 +64,7 @@ namespace PDFEditor.Ink
                     entry.Adorner.Hide();
                 }
 
-                UpdateCursorVisibility(entry.Canvas);
+                UpdateCursorState(entry);
             }
         }
 
@@ -87,9 +97,20 @@ namespace PDFEditor.Ink
             _entries.Clear();
         }
 
+        public void SetMode(CursorMode mode, Cursor fallbackCursor = null)
+        {
+            _mode = mode;
+            _fallbackCursor = fallbackCursor ?? Cursors.Arrow;
+
+            foreach (Entry entry in _entries.Values)
+            {
+                UpdateCursorState(entry);
+            }
+        }
+
         private void Canvas_MouseEnter(object sender, MouseEventArgs e)
         {
-            if (!_enabled) return;
+            if (!_enabled || _mode == CursorMode.Hidden) return;
             InkCanvas canvas = sender as InkCanvas;
             Entry entry;
             if (canvas != null && _entries.TryGetValue(canvas, out entry))
@@ -100,7 +121,7 @@ namespace PDFEditor.Ink
 
         private void Canvas_MouseMove(object sender, MouseEventArgs e)
         {
-            if (!_enabled) return;
+            if (!_enabled || _mode == CursorMode.Hidden) return;
             InkCanvas canvas = sender as InkCanvas;
             Entry entry;
             if (canvas != null && _entries.TryGetValue(canvas, out entry))
@@ -121,7 +142,7 @@ namespace PDFEditor.Ink
 
         private void Canvas_StylusEnter(object sender, StylusEventArgs e)
         {
-            if (!_enabled) return;
+            if (!_enabled || _mode == CursorMode.Hidden) return;
             InkCanvas canvas = sender as InkCanvas;
             Entry entry;
             if (canvas != null && _entries.TryGetValue(canvas, out entry))
@@ -132,7 +153,7 @@ namespace PDFEditor.Ink
 
         private void Canvas_StylusMove(object sender, StylusEventArgs e)
         {
-            if (!_enabled) return;
+            if (!_enabled || _mode == CursorMode.Hidden) return;
             InkCanvas canvas = sender as InkCanvas;
             Entry entry;
             if (canvas != null && _entries.TryGetValue(canvas, out entry))
@@ -151,17 +172,22 @@ namespace PDFEditor.Ink
             }
         }
 
-        private void UpdateCursorVisibility(InkCanvas canvas)
+        private void UpdateCursorState(Entry entry)
         {
-            if (_enabled)
+            var canvas = entry.Canvas;
+            if (_mode == CursorMode.Hidden || !_enabled)
             {
-                canvas.UseCustomCursor = true;
-                canvas.Cursor = Cursors.None;
+                entry.Adorner.Hide();
+                canvas.UseCustomCursor = false;
+                canvas.Cursor = _fallbackCursor ?? Cursors.Arrow;
             }
             else
             {
-                canvas.UseCustomCursor = false;
-                canvas.ClearValue(InkCanvas.CursorProperty);
+                canvas.UseCustomCursor = true;
+                canvas.Cursor = Cursors.None;
+                entry.Adorner.SetVisual(_mode == CursorMode.Eraser
+                    ? PenCursorAdorner.CursorVisual.Eraser
+                    : PenCursorAdorner.CursorVisual.Pen);
             }
         }
 
@@ -197,7 +223,7 @@ namespace PDFEditor.Ink
             canvas.StylusMove += Canvas_StylusMove;
             canvas.StylusLeave += Canvas_StylusLeave;
 
-            UpdateCursorVisibility(canvas);
+            UpdateCursorState(entry);
         }
     }
 }

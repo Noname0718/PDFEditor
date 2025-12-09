@@ -2,6 +2,7 @@
 using System.Windows.Controls;
 using System.Windows.Ink;
 using System.Windows.Media;
+using System;
 
 namespace PDFEditor.Ink
 {
@@ -38,8 +39,8 @@ namespace PDFEditor.Ink
                     UpdateDrawingAttributes(inkCanvas);
                     break;
                 case DrawTool.Eraser:
-                    inkCanvas.EditingMode = InkCanvasEditingMode.EraseByStroke;
-                    inkCanvas.EraserShape = new RectangleStylusShape(10, 10); // 지우개 크기 고정
+                    inkCanvas.EditingMode = InkCanvasEditingMode.EraseByPoint;
+                    UpdateEraserShape(inkCanvas);
                     break;
             }
         }
@@ -51,9 +52,13 @@ namespace PDFEditor.Ink
             CurrentColor = color;
             if (inkCanvas == null) return;
 
-            if (CurrentTool != DrawTool.Eraser)
+            if (CurrentTool == DrawTool.Eraser)
             {
-                    UpdateDrawingAttributes(inkCanvas);
+                UpdateEraserShape(inkCanvas);
+            }
+            else
+            {
+                UpdateDrawingAttributes(inkCanvas);
             }
         }
             
@@ -65,9 +70,13 @@ namespace PDFEditor.Ink
             CurrentThickness = thickness;
             if (inkCanvas == null) return;
 
-            if (CurrentTool != DrawTool.Eraser)
+            if (CurrentTool == DrawTool.Eraser)
             {
-                    UpdateDrawingAttributes(inkCanvas);
+                UpdateEraserShape(inkCanvas);
+            }
+            else
+            {
+                UpdateDrawingAttributes(inkCanvas);
             }
         }
 
@@ -100,6 +109,14 @@ namespace PDFEditor.Ink
             }
             
             inkCanvas.DefaultDrawingAttributes = attributes;
+        }
+
+        private void UpdateEraserShape(InkCanvas inkCanvas)
+        {
+            if (inkCanvas == null) return;
+
+            double size = Math.Max(4, CurrentThickness);
+            inkCanvas.EraserShape = new EllipseStylusShape(size, size);
         }
 
     }

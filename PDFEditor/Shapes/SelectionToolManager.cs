@@ -7,11 +7,14 @@ using System.Windows.Ink;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Documents;
+using PDFEditor.Text;
 
 namespace PDFEditor.Shapes
 {
     public class SelectionToolManager
     {
+        public event Action<InkCanvas, TextBox> TextElementDoubleClicked;
+
         private class SelectionState
         {
             public InkCanvas Canvas;
@@ -95,6 +98,16 @@ namespace PDFEditor.Shapes
             Point pos = e.GetPosition(canvas);
 
             var element = FindSelectableElement(state, pos);
+            if (element is TextBox textElement)
+            {
+                var tag = textElement.Tag as string;
+                if (tag == TextToolManager.TextElementTag && e.ClickCount >= 2)
+                {
+                    TextElementDoubleClicked?.Invoke(canvas, textElement);
+                    e.Handled = true;
+                    return;
+                }
+            }
 
             if (element != null)
             {
@@ -256,6 +269,13 @@ namespace PDFEditor.Shapes
                 var tag = shape.Tag as string;
                 return tag == ShapeToolManager.ShapeElementTag;
             }
+
+            if (element is TextBox textBox)
+            {
+                var tag = textBox.Tag as string;
+                return tag == TextToolManager.TextElementTag;
+            }
+
             return false;
         }
 
