@@ -57,6 +57,34 @@
 | 지우개로 도형이 지워지지 않음 | InkCanvas 지우개는 `Stroke`에만 동작하고, 도형은 `Shape` 컨트롤로 추가되어 있어서 히트 테스트가 되지 않음 | `ShapeToolManager`가 Preview 이벤트에서 마우스 이동을 추적하고, InkCanvas.Children을 역순으로 검사하여 `RenderedGeometry` 기반으로 도형을 찾아 삭제하도록 로직을 추가 |
 | 잉크를 그린 직후 Ctrl+Z가 반응하지 않음 | InkCanvas 기본 Undo가 먼저 스트로크를 지워 버려 커스텀 Undo 스택에서 대상을 찾지 못함 | InkCanvas 기본 Undo 호출을 제거하고, `StrokeCollected`/`StrokesChanged`에서 Stroke를 복제해 직접 히스토리를 관리. Undo 시에는 StylusPoints를 비교해 동일 Stroke를 찾아 제거하도록 보완 |
 
+## 기능별 구현 위치
+| 기능 | 구현 파일/클래스/메서드 |
+| --- | --- |
+| PDF 렌더링 및 페이지 구성 | `MainWindow.xaml.cs` – `LoadPdfFromPath`, `RenderAllPages`, `RenderPdfPageImage` |
+| 페이지 이동/스크롤 | `MainWindow.xaml.cs` – `ScrollToPage`, `NextPage_Click`, `PrevPage_Click`, `GoToPage_Click` |
+| 줌(슬라이더/텍스트/휠/폭 맞추기) | `MainWindow.xaml.cs` – `FitWidthToViewer`, `ApplyZoom`, `PdfScrollViewer_PreviewMouseWheel` |
+| 펜/형광펜/지우개 도구 | `Ink/InkToolManager.cs` 및 `MainWindow.xaml.cs` – `ToolButton_Click`, `ThicknessSlider_ValueChanged` |
+| 도형(Line/Rect/Ellipse/Triangle) | `Shapes/ShapetoolManager.cs` – `SetShape`, `Canvas_Mouse*` + `MainWindow.xaml.cs`의 도구 바 연동 |
+| 텍스트 입력/편집 | `Text/TextToolManager.cs` – `AttachCanvas`, `BeginEditing`, `TextBoxCreated/Committed` 이벤트 |
+| 선택/이동/리사이즈 및 복사/삭제 | `Shapes/SelectionToolManager.cs` + `MainWindow.xaml.cs` – `CopySelectedShape`, `PasteCopiedShape`, `DeleteCurrentSelection` |
+| 부분 지우개(도형/텍스트) | `Ink/AreaEraserManager.cs` – `SetEnabled`, `EraseAt` + `MainWindow.xaml.cs` – `AreaEraser_ElementErased` |
+| Undo/Redo | `MainWindow.UndoRedo.cs` – `UndoRedoManager`, `IUndoRedoAction` 구현 + `MainWindow.xaml.cs` – 단축키 핸들러 |
+| 주석 저장/불러오기(.pdfanno) | `Services/AnnotationPersistenceService.cs` – `Save`, `Load` + `MainWindow.xaml.cs` – UI 이벤트 |
+| PDF 내보내기(주석 Flatten) | `MainWindow.xaml.cs` – `CaptureAnnotatedPages`, `WriteFlattenedPdf` |
+
+## 개발 지표
+- **직접 구현 메서드 수**: 253개 (C# 소스 전체 기준, 자동 생성 코드 제외)
+- **개발 난이도**: 4/5 – 복잡한 InkCanvas 상태와 Undo/Redo, 주석 직렬화, 대형 코드비하인드를 동시 관리해야 함
+- **투입 시간**: 저장된 기록이 없어 추정 불가(소스만으로는 파악 어려움)
+
+## 제한 사항
+- `.pdfanno` 외부 파일과 “Flatten 내보내기”만 지원하며, 원본 PDF에 주석 객체를 직접 삽입하지 않아 타 PDF 뷰어에서 PDF만 열면 편집 내용이 남지 않습니다.
+- MVVM/서비스 계층이 충분히 분리되지 않아 `MainWindow.xaml.cs` 하나가 대부분의 로직을 담당합니다(2000줄 이상). 구조 확장·테스트 난도가 높습니다.
+- 솔루션에 테스트 프로젝트나 CI가 없으므로 기능 회귀를 자동 검증할 수 없습니다.
+- 이미지/스탬프 등 비잉크 객체 삽입 기능이 없어 펜/도형/텍스트 외 주석 수단이 제한됩니다.
+- 사용자 환경(최근 문서, 다국어, 접근성, 단축키 커스터마이즈 등) 기능이 제공되지 않아 제품화 시 추가 작업이 필요합니다.
+- 일부 오류 상황(예: 주석 로드 중 유효하지 않은 페이지, 손상된 XML)은 간단한 메시지 후 건너뛰도록 되어 있어 세분화된 복구 전략이 없습니다.
+
 ## 실행 및 사용 방법
 1. Visual Studio 또는 `msbuild`로 `PDFEditor.sln`을 빌드합니다.
 2. 앱 실행 후 `PDF 열기` 버튼으로 PDF 파일을 선택합니다.

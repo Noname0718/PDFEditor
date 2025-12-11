@@ -75,6 +75,7 @@
     <Compile Include="Shapes\SelectionToolManager.cs" />
     <Compile Include="Shapes\ShapetoolManager.cs" />
     <Compile Include="Text\TextToolManager.cs" />
+    <Compile Include="Services\AnnotationPersistenceService.cs" />
     <Page Include="MainWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
@@ -88,6 +89,7 @@
     <Compile Include="Ink\AreaEraserManager.cs" />
     <Compile Include="Ink\InkToolManager.cs" />
     <Compile Include="Ink\StrokeSerializer.cs" />
+    <Compile Include="MainWindow.UndoRedo.cs" />
     <Compile Include="MainWindow.xaml.cs">
       <DependentUpon>MainWindow.xaml</DependentUpon>
       <SubType>Code</SubType>

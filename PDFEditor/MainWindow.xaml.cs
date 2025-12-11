@@ -2,6 +2,7 @@
 using PDFEditor.Ink;
 using PDFEditor.Shapes;
 using PDFEditor.Text;
+using PDFEditor.Services;
 using PdfiumViewer;
 using System;
 using System.Collections.Generic;
@@ -20,8 +21,6 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Effects;
 using System.Windows.Shapes;
-using System.Xml;
-using System.Xml.Linq;
 
 namespace PDFEditor
 {
@@ -58,19 +57,14 @@ namespace PDFEditor
         private readonly TextToolManager _textTool = new TextToolManager();         // 텍스트 박스 생성/편집
         private readonly PenCursorManager _penCursorManager = new PenCursorManager();       // 펜 커서 미리보기
         private readonly AreaEraserManager _areaEraserManager = new AreaEraserManager();   // 도형/텍스트 일괄 지우개
+        private readonly AnnotationPersistenceService _annotationService = new AnnotationPersistenceService(); // 주석 저장/불러오기
         private double _textDefaultFontSize = 18;                    // 새 텍스트 박스 기본 폰트 크기
         private Color _textDefaultFontColor = Colors.Black;          // 새 텍스트 박스 기본 글자색
-        private const double MinTextFontSize = 8;                    // UI에서 허용하는 글꼴 최소값
+        private const double MinTextFontSize = 4;                    // UI에서 허용하는 글꼴 최소값
         private const double MaxTextFontSize = 96;                   // UI에서 허용하는 글꼴 최대값
         private const double TextFontStep = 2;                       // 버튼 조절 시 증가/감소량
         private static readonly Guid StrokeIdProperty = new Guid("F1F5A601-6CF2-4A0F-9BD2-1A96D4BB3F25"); // Stroke GUID 저장 키
 
-        // ----------------------------------------------------------------------------------------------------
-        //  Undo/Redo 등 기록 장치
-        // ----------------------------------------------------------------------------------------------------
-        private readonly Stack<IUndoRedoAction> _undoStack = new Stack<IUndoRedoAction>();
-        private readonly Stack<IUndoRedoAction> _redoStack = new Stack<IUndoRedoAction>();
-        private bool _recordHistory = true;                         // 대량 작업 시 히스토리 중단 플래그
         private class CopiedShapeInfo
         {
             public string Xaml;
@@ -243,8 +237,7 @@ namespace PDFEditor
                 return;
             }
 
-            _recordHistory = false;
-            try
+            using (_undoRedoManager.PauseRecording())
             {
                 foreach (var canvas in _pageInkCanvases.Values)
                 {
@@ -252,7 +245,7 @@ namespace PDFEditor
 
                     var removable = canvas.Children
                         .OfType<UIElement>()
-                        .Where(IsSerializableElement)
+                        .Where(AnnotationPersistenceService.IsSerializableElement)
                         .ToList();
 
                     foreach (var element in removable)
@@ -262,10 +255,6 @@ namespace PDFEditor
                     }
                 }
                 ClearHistory();
-            }
-            finally
-            {
-                _recordHistory = true;
             }
         }
 
@@ -531,39 +520,7 @@ namespace PDFEditor
         {
             try
             {
-                var root = new XElement("PdfAnnotations",
-                    new XAttribute("Version", "1"),
-                    new XElement("PdfPath", _currentPdfPath ?? string.Empty));
-
-                var pagesElement = new XElement("Pages");
-
-                foreach (var kvp in _pageInkCanvases)
-                {
-                    int pageIndex = kvp.Key;
-                    InkCanvas canvas = kvp.Value;
-                    var pageElement = new XElement("Page", new XAttribute("Index", pageIndex));
-
-                    string strokes = SerializeStrokes(canvas.Strokes);
-                    if (!string.IsNullOrEmpty(strokes))
-                    {
-                        pageElement.Add(new XElement("Strokes", strokes));
-                    }
-
-                    var elementsElement = SerializeElements(canvas);
-                    if (elementsElement != null)
-                    {
-                        pageElement.Add(elementsElement);
-                    }
-
-                    if (pageElement.HasElements)
-                    {
-                        pagesElement.Add(pageElement);
-                    }
-                }
-
-                root.Add(pagesElement);
-                var doc = new XDocument(root);
-                doc.Save(path);
+                _annotationService.Save(path, _currentPdfPath, _pageInkCanvases);
                 _currentAnnotationPath = path;
                 MessageBox.Show("주석을 저장했습니다.", "저장 완료", MessageBoxButton.OK, MessageBoxImage.Information);
             }
@@ -585,165 +542,67 @@ namespace PDFEditor
                 return;
             }
 
+            AnnotationDocument annotationDocument;
             try
             {
-                var doc = XDocument.Load(path);
-                var root = doc.Root;
-                if (root == null)
-                    throw new InvalidDataException("잘못된 주석 파일입니다.");
-
-                string pdfPath = root.Element("PdfPath")?.Value;
-                if (!suppressPdfReload && !string.IsNullOrWhiteSpace(pdfPath) && File.Exists(pdfPath))
-                {
-                    LoadPdfFromPath(pdfPath);
-                }
-                else if (_pdf == null)
-                {
-                    MessageBox.Show("주석과 연결된 PDF를 먼저 열어야 합니다.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
-
-                var pageNodes = root.Element("Pages")?.Elements("Page");
-                if (pageNodes == null)
-                {
-                    MessageBox.Show("주석 파일에 저장된 내용이 없습니다.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
-
-                _currentAnnotationPath = path;
-                _recordHistory = false;
-                try
-                {
-                    foreach (var pageNode in pageNodes)
-                    {
-                        int pageIndex = (int?)pageNode.Attribute("Index") ?? -1;
-                        if (!_pageInkCanvases.TryGetValue(pageIndex, out InkCanvas canvas))
-                            continue;
-
-                        string strokesData = pageNode.Element("Strokes")?.Value;
-                        var strokes = DeserializeStrokes(strokesData);
-                        if (strokes != null)
-                        {
-                            foreach (var stroke in strokes)
-                            {
-                                canvas.Strokes.Add(stroke);
-                                EnsureStrokeId(stroke);
-                            }
-                        }
-
-                        var elementsNode = pageNode.Element("Elements");
-                        if (elementsNode != null)
-                        {
-                            foreach (var elementNode in elementsNode.Elements("Element"))
-                            {
-                                string xaml = elementNode.Value;
-                                var element = DeserializeElement(xaml);
-                                if (element == null)
-                                    continue;
-                                canvas.Children.Add(element);
-                                if (element is TextBox textBox)
-                                {
-                                    _textTool.RegisterExistingTextBox(canvas, textBox);
-                                }
-                            }
-                        }
-                    }
-                }
-                finally
-                {
-                    _recordHistory = true;
-                }
-
-                MessageBox.Show("주석을 불러왔습니다.", "불러오기 완료", MessageBoxButton.OK, MessageBoxImage.Information);
+                annotationDocument = _annotationService.Load(path);
             }
             catch (Exception ex)
             {
                 MessageBox.Show("주석을 불러올 수 없습니다: " + ex.Message, "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
             }
-        }
 
-        /// <summary>
-        /// InkCanvas의 StrokeCollection을 메모리 스트림에 쓰고 Base64 문자열로 반환한다.
-        /// 빈 컬렉션이면 null을 반환하여 XML 문서가 불필요하게 커지는 것을 방지한다.
-        /// </summary>
-        private string SerializeStrokes(StrokeCollection strokes)
-        {
-            if (strokes == null || strokes.Count == 0)
-                return null;
-
-            using (var ms = new MemoryStream())
+            string pdfPath = annotationDocument?.PdfPath;
+            if (!suppressPdfReload && !string.IsNullOrWhiteSpace(pdfPath) && File.Exists(pdfPath))
             {
-                strokes.Save(ms);
-                return Convert.ToBase64String(ms.ToArray());
+                LoadPdfFromPath(pdfPath);
             }
-        }
-
-        /// <summary>
-        /// Base64 문자열을 StrokeCollection으로 되돌린다.
-        /// 저장된 내용이 없으면 null, 데이터가 손상되면 예외를 호출자에게 전달한다.
-        /// </summary>
-        private StrokeCollection DeserializeStrokes(string base64)
-        {
-            if (string.IsNullOrWhiteSpace(base64))
-                return null;
-
-            byte[] bytes = Convert.FromBase64String(base64);
-            using (var ms = new MemoryStream(bytes))
+            else if (_pdf == null)
             {
-                return new StrokeCollection(ms);
+                MessageBox.Show("주석과 연결된 PDF를 먼저 열어야 합니다.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
             }
-        }
 
-        /// <summary>
-        /// InkCanvas.Children 중에서 직렬화 대상(TextBox/Shape)만 골라 XAML을 CDATA로 포함시킨다.
-        /// 비어 있는 경우 null을 반환해 상위 XML에서 엘리먼트를 생략한다.
-        /// </summary>
-        private XElement SerializeElements(InkCanvas canvas)
-        {
-            var elements = new XElement("Elements");
-            foreach (UIElement child in canvas.Children)
+            var pages = annotationDocument?.Pages;
+            if (pages == null || pages.Count == 0)
             {
-                if (!IsSerializableElement(child))
-                    continue;
-                string xaml = XamlWriter.Save(child);
-                elements.Add(new XElement("Element", new XCData(xaml)));
+                MessageBox.Show("주석 파일에 저장된 내용이 없습니다.", "안내", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
             }
-            return elements.HasElements ? elements : null;
-        }
 
-        /// <summary>
-        /// XAML 문자열을 다시 UIElement 인스턴스로 복원한다.
-        /// TextBox/Shape 외에는 저장하지 않으므로 해당 타입으로 다시 생성되는 것이 보장된다.
-        /// </summary>
-        private UIElement DeserializeElement(string xaml)
-        {
-            if (string.IsNullOrWhiteSpace(xaml))
-                return null;
-
-            using (var stringReader = new StringReader(xaml))
-            using (var xmlReader = XmlReader.Create(stringReader))
+            _currentAnnotationPath = path;
+            using (_undoRedoManager.PauseRecording())
             {
-                return XamlReader.Load(xmlReader) as UIElement;
-            }
-        }
+                foreach (var page in pages)
+                {
+                    if (!_pageInkCanvases.TryGetValue(page.PageIndex, out InkCanvas canvas))
+                        continue;
 
-        /// <summary>
-        /// InkCanvas 자식 중 Text/Shape인지 검사하여 직렬화 여부를 결정한다.
-        /// 태그 값으로 도구에서 생성한 요소만 걸러내고, 페이지 프레임/스크롤 보조 요소는 제외한다.
-        /// </summary>
-        private bool IsSerializableElement(UIElement element)
-        {
-            if (element is TextBox textBox)
-            {
-                return Equals(textBox.Tag as string, TextToolManager.TextElementTag);
+                    if (page.Strokes != null)
+                    {
+                        foreach (var stroke in page.Strokes)
+                        {
+                            canvas.Strokes.Add(stroke);
+                            EnsureStrokeId(stroke);
+                        }
+                    }
+
+                    if (page.Elements != null)
+                    {
+                        foreach (var element in page.Elements)
+                        {
+                            canvas.Children.Add(element);
+                            if (element is TextBox textBox)
+                            {
+                                _textTool.RegisterExistingTextBox(canvas, textBox);
+                            }
+                        }
+                    }
+                }
             }
 
-            if (element is Shape shape)
-            {
-                return Equals(shape.Tag, ShapeToolManager.ShapeElementTag);
-            }
-
-            return false;
+            MessageBox.Show("주석을 불러왔습니다.", "불러오기 완료", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         /// <summary>
@@ -1869,87 +1728,6 @@ namespace PDFEditor
             stroke.Transform(matrix, false);
         }
 
-        private void RegisterGroupedAddition(InkCanvas canvas, List<UIElement> elements, List<Stroke> strokes)
-        {
-            if (canvas == null)
-                return;
-
-            int pageIndex;
-            if (!TryGetPageIndex(canvas, out pageIndex))
-                return;
-
-            var actions = new List<IUndoRedoAction>();
-            if (elements != null)
-            {
-                foreach (var element in elements)
-                {
-                    if (element == null)
-                        continue;
-                    actions.Add(new ShapeAddedAction(pageIndex, element));
-                }
-            }
-
-            if (strokes != null)
-            {
-                foreach (var stroke in strokes)
-                {
-                    if (stroke == null)
-                        continue;
-                    Guid id = EnsureStrokeId(stroke);
-                    var snapshot = CloneStrokeWithId(stroke);
-                    actions.Add(new StrokeAddedAction(pageIndex, id, snapshot));
-                }
-            }
-
-            if (actions.Count > 0)
-            {
-                PushUndoAction(actions.Count == 1 ? actions[0] : new CompositeAction(actions));
-            }
-        }
-
-        private bool PerformUndo()
-        {
-            Debug.WriteLine(">>> PerformUndo 호출");
-            if (_undoStack.Count == 0)
-                return false;
-
-            var action = _undoStack.Pop();
-            _recordHistory = false;
-            action.Undo(this);
-            _recordHistory = true;
-            _redoStack.Push(action);
-            return true;
-        }
-
-        private bool PerformRedo()
-        {
-            Debug.WriteLine(">>> PerformRedo 호출");
-            if (_redoStack.Count == 0)
-                return false;
-
-            var action = _redoStack.Pop();
-            _recordHistory = false;
-            action.Redo(this);
-            _recordHistory = true;
-            _undoStack.Push(action);
-            return true;
-        }
-
-        private void PushUndoAction(IUndoRedoAction action)
-        {
-            if (!_recordHistory || action == null)
-                return;
-
-            _undoStack.Push(action);
-            _redoStack.Clear();
-        }
-
-        private void ClearHistory()
-        {
-            _undoStack.Clear();
-            _redoStack.Clear();
-        }
-
         private void ShapeTool_ShapeCreated(InkCanvas canvas, UIElement element)
         {
             ActivateCanvasPage(canvas);
@@ -2066,98 +1844,6 @@ namespace PDFEditor
             TextMiniToolbar.PlacementTarget = null;
         }
 
-        private void RegisterShapeAddition(InkCanvas canvas, UIElement element)
-        {
-            if (canvas == null || element == null)
-                return;
-
-            int pageIndex;
-            if (!TryGetPageIndex(canvas, out pageIndex))
-                return;
-
-            PushUndoAction(new ShapeAddedAction(pageIndex, element));
-        }
-
-        private void RegisterShapeRemoval(InkCanvas canvas, UIElement element)
-        {
-            if (canvas == null || element == null)
-                return;
-
-            int pageIndex;
-            if (!TryGetPageIndex(canvas, out pageIndex))
-                return;
-
-            PushUndoAction(new ShapeRemovedAction(pageIndex, element));
-        }
-
-        private void InkCanvas_StrokeCollected(object sender, InkCanvasStrokeCollectedEventArgs e)
-        {
-            if (!_recordHistory) return;
-            if (!(sender is InkCanvas canvas)) return;
-
-            ActivateCanvasPage(canvas);
-
-            if (!TryGetPageIndex(canvas, out int pageIndex))
-                return;
-
-            Debug.WriteLine($">>> StrokeCollected page={pageIndex}, strokeHash={e.Stroke?.GetHashCode()}");
-
-            Guid strokeId = EnsureStrokeId(e.Stroke);
-            var snapshot = CloneStrokeWithId(e.Stroke);
-            PushUndoAction(new StrokeAddedAction(pageIndex, strokeId, snapshot));
-        }
-
-        private void InkCanvas_StrokesChanged(object sender, StrokeCollectionChangedEventArgs e)
-        {
-            if (!_recordHistory) return;
-            if (!(sender is InkCanvas canvas)) return;
-
-            ActivateCanvasPage(canvas);
-
-            if (!TryGetPageIndex(canvas, out int pageIndex))
-                return;
-
-            var removedSnapshots = new List<Stroke>();
-            var removedIds = new List<Guid>();
-            if (e.Removed != null)
-            {
-                foreach (var stroke in e.Removed)
-                {
-                    var snapshot = CloneStrokeWithId(stroke);
-                    if (snapshot != null)
-                    {
-                        removedSnapshots.Add(snapshot);
-                        var id = GetStrokeId(snapshot);
-                        if (id.HasValue)
-                            removedIds.Add(id.Value);
-                    }
-                }
-            }
-
-            // 새로운 스트로크가 추가된 이벤트(removed=0, added>0)는 StrokeCollected에서 이미 처리하므로 무시
-            if (removedSnapshots.Count == 0)
-                return;
-
-            var addedSnapshots = new List<Stroke>();
-            var addedIds = new List<Guid>();
-            if (e.Added != null)
-            {
-                foreach (var stroke in e.Added)
-                {
-                    addedIds.Add(EnsureStrokeId(stroke));
-                    var snapshot = CloneStrokeWithId(stroke);
-                    if (snapshot != null)
-                    {
-                        addedSnapshots.Add(snapshot);
-                    }
-                }
-            }
-
-            Debug.WriteLine($">>> StrokesChanged page={pageIndex}, Added={addedSnapshots.Count}, Removed={removedSnapshots.Count}");
-
-            PushUndoAction(new StrokeCollectionChangedAction(pageIndex, removedIds, removedSnapshots, addedIds, addedSnapshots));
-        }
-
         private void RemoveShapeFromCanvas(InkCanvas canvas, UIElement element)
         {
             if (canvas == null || element == null) return;
@@ -2235,7 +1921,7 @@ namespace PDFEditor
 
             foreach (UIElement child in source.Children)
             {
-                if (!IsSerializableElement(child)) continue;
+                if (!AnnotationPersistenceService.IsSerializableElement(child)) continue;
                 try
                 {
                     var xaml = XamlWriter.Save(child);
@@ -2357,282 +2043,6 @@ namespace PDFEditor
             }
         }
 
-        private interface IUndoRedoAction
-        {
-            void Undo(MainWindow window);
-            void Redo(MainWindow window);
-        }
-
-        private class StrokeAddedAction : IUndoRedoAction
-        {
-            private readonly int _pageIndex;
-            private readonly Guid _strokeId;
-            private readonly Stroke _snapshot;
-
-            public StrokeAddedAction(int pageIndex, Guid strokeId, Stroke snapshot)
-            {
-                _pageIndex = pageIndex;
-                _strokeId = strokeId;
-                _snapshot = snapshot;
-            }
-
-            public void Undo(MainWindow window)
-            {
-                var canvas = window.GetInkCanvas(_pageIndex);
-                if (canvas == null)
-                {
-                    Debug.WriteLine($"StrokeAddedAction.Undo: canvas null for page={_pageIndex}");
-                    return;
-                }
-
-                bool removed = window.TryRemoveStrokeById(canvas, _strokeId);
-                Debug.WriteLine($"StrokeAddedAction.Undo: page={_pageIndex}, removed={removed}, strokeId={_strokeId}");
-            }
-
-            public void Redo(MainWindow window)
-            {
-                var canvas = window.GetInkCanvas(_pageIndex);
-                if (canvas == null)
-                {
-                    Debug.WriteLine($"StrokeAddedAction.Redo: canvas null for page={_pageIndex}");
-                    return;
-                }
-
-                if (_snapshot != null)
-                {
-                    var clone = _snapshot.Clone();
-                    window.EnsureStrokeId(clone);
-                    canvas.Strokes.Add(clone);
-                }
-                Debug.WriteLine($"StrokeAddedAction.Redo: page={_pageIndex}, strokeId={_strokeId}");
-            }
-        }
-
-        private class StrokeCollectionChangedAction : IUndoRedoAction
-        {
-            private readonly int _pageIndex;
-            private readonly List<Guid> _removedIds;
-            private readonly List<Stroke> _removedSnapshots;
-            private readonly List<Guid> _addedIds;
-            private readonly List<Stroke> _addedSnapshots;
-
-            public StrokeCollectionChangedAction(int pageIndex, List<Guid> removedIds, List<Stroke> removedSnapshots,
-                List<Guid> addedIds, List<Stroke> addedSnapshots)
-            {
-                _pageIndex = pageIndex;
-                _removedIds = removedIds ?? new List<Guid>();
-                _removedSnapshots = CloneStrokeList(removedSnapshots);
-                _addedIds = addedIds ?? new List<Guid>();
-                _addedSnapshots = CloneStrokeList(addedSnapshots);
-            }
-
-            public void Undo(MainWindow window)
-            {
-                var canvas = window.GetInkCanvas(_pageIndex);
-                if (canvas == null)
-                {
-                    Debug.WriteLine($"StrokeCollectionChangedAction.Undo: canvas null for page={_pageIndex}");
-                    return;
-                }
-
-                Debug.WriteLine($"StrokeCollectionChangedAction.Undo: page={_pageIndex}, removeAdded={_addedIds.Count}, addRemoved={_removedSnapshots.Count}");
-
-                foreach (var id in _addedIds)
-                {
-                    window.TryRemoveStrokeById(canvas, id);
-                }
-
-                foreach (var stroke in _removedSnapshots)
-                {
-                    var clone = stroke?.Clone();
-                    if (clone != null)
-                    {
-                        window.EnsureStrokeId(clone);
-                        canvas.Strokes.Add(clone);
-                    }
-                }
-            }
-
-            public void Redo(MainWindow window)
-            {
-                var canvas = window.GetInkCanvas(_pageIndex);
-                if (canvas == null)
-                {
-                    Debug.WriteLine($"StrokeCollectionChangedAction.Redo: canvas null for page={_pageIndex}");
-                    return;
-                }
-
-                Debug.WriteLine($"StrokeCollectionChangedAction.Redo: page={_pageIndex}, removeRemoved={_removedIds.Count}, addAdded={_addedSnapshots.Count}");
-
-                foreach (var id in _removedIds)
-                {
-                    window.TryRemoveStrokeById(canvas, id);
-                }
-
-                foreach (var stroke in _addedSnapshots)
-                {
-                    var clone = stroke?.Clone();
-                    if (clone != null)
-                    {
-                        window.EnsureStrokeId(clone);
-                        canvas.Strokes.Add(clone);
-                    }
-                }
-            }
-
-            private static List<Stroke> CloneStrokeList(IEnumerable<Stroke> strokes)
-            {
-                var list = new List<Stroke>();
-                if (strokes == null)
-                    return list;
-
-                foreach (var stroke in strokes)
-                {
-                    var clone = stroke?.Clone();
-                    if (clone != null)
-                        list.Add(clone);
-                }
-                return list;
-            }
-        }
-
-        private class ShapeAddedAction : IUndoRedoAction
-        {
-            private readonly int _pageIndex;
-            private readonly UIElement _element;
-
-            public ShapeAddedAction(int pageIndex, UIElement element)
-            {
-                _pageIndex = pageIndex;
-                _element = element;
-            }
-
-            public void Undo(MainWindow window)
-            {
-                var canvas = window.GetInkCanvas(_pageIndex);
-                window.RemoveShapeFromCanvas(canvas, _element);
-            }
-
-            public void Redo(MainWindow window)
-            {
-                var canvas = window.GetInkCanvas(_pageIndex);
-                window.AddShapeToCanvas(canvas, _element);
-            }
-        }
-
-        private class ShapeRemovedAction : IUndoRedoAction
-        {
-            private readonly int _pageIndex;
-            private readonly UIElement _element;
-
-            public ShapeRemovedAction(int pageIndex, UIElement element)
-            {
-                _pageIndex = pageIndex;
-                _element = element;
-            }
-
-            public void Undo(MainWindow window)
-            {
-                var canvas = window.GetInkCanvas(_pageIndex);
-                window.AddShapeToCanvas(canvas, _element);
-            }
-
-            public void Redo(MainWindow window)
-            {
-                var canvas = window.GetInkCanvas(_pageIndex);
-                window.RemoveShapeFromCanvas(canvas, _element);
-            }
-        }
-
-        private class TextEditedAction : IUndoRedoAction
-        {
-            private readonly TextBox _textBox;
-            private readonly string _oldText;
-            private readonly string _newText;
-
-            public TextEditedAction(int pageIndex, TextBox textBox, string oldText, string newText)
-            {
-                _textBox = textBox;
-                _oldText = oldText ?? string.Empty;
-                _newText = newText ?? string.Empty;
-            }
-
-            public void Undo(MainWindow window)
-            {
-                window?.ApplyTextContent(_textBox, _oldText);
-            }
-
-            public void Redo(MainWindow window)
-            {
-                window?.ApplyTextContent(_textBox, _newText);
-            }
-        }
-
-        private class TextStyleChangedAction : IUndoRedoAction
-        {
-            private readonly TextBox _textBox;
-            private readonly object _oldValue;
-            private readonly object _newValue;
-            private readonly Action<TextBox, object> _setter;
-
-            public TextStyleChangedAction(int pageIndex, TextBox textBox, object oldValue, object newValue, Action<TextBox, object> setter)
-            {
-                _textBox = textBox;
-                _setter = setter;
-                _oldValue = CloneValue(oldValue);
-                _newValue = CloneValue(newValue);
-            }
-
-            private static object CloneValue(object value)
-            {
-                if (value is Brush brush)
-                {
-                    var clone = brush.CloneCurrentValue();
-                    if (clone.CanFreeze) clone.Freeze();
-                    return clone;
-                }
-
-                return value;
-            }
-
-            public void Undo(MainWindow window)
-            {
-                window?.ApplyTextStyle(_textBox, _setter, _oldValue);
-            }
-
-            public void Redo(MainWindow window)
-            {
-                window?.ApplyTextStyle(_textBox, _setter, _newValue);
-            }
-        }
-
-        private class CompositeAction : IUndoRedoAction
-        {
-            private readonly List<IUndoRedoAction> _actions;
-
-            public CompositeAction(IEnumerable<IUndoRedoAction> actions)
-            {
-                _actions = actions != null ? new List<IUndoRedoAction>(actions) : new List<IUndoRedoAction>();
-            }
-
-            public void Undo(MainWindow window)
-            {
-                if (window == null) return;
-                for (int i = _actions.Count - 1; i >= 0; i--)
-                {
-                    _actions[i].Undo(window);
-                }
-            }
-
-            public void Redo(MainWindow window)
-            {
-                if (window == null) return;
-                foreach (var action in _actions)
-                {
-                    action.Redo(window);
-                }
-            }
-        }
 
     }
 }
